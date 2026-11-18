@@ -50,3 +50,16 @@ work, and most competitors won't do it.
 - No Code Mode / deferred tool loading beyond the subagent split, unless
   time permits after Phases 0-7 in `docs/PLAN.md` are done.
 - No VS Code Marketplace publishing — explicitly out of scope per the brief.
+
+## MCP server runs INSIDE the extension host, not as a standalone process
+Originally planned `mcp-server/` as a separate top-level Node project. Corrected
+after realizing `go_to_definition` and real symbol extraction need
+`vscode.commands.executeCommand('vscode.executeDocumentSymbolProvider', ...)`
+and `'vscode.executeDefinitionProvider'` — APIs that only exist inside the VS
+Code extension host process, not in a standalone Node script. Moved the MCP
+server to `extension/src/mcpServer/`: it starts an HTTP+MCP transport server
+from within `extension.ts`'s `activate()`, using `vscode.*` APIs directly for
+anything editor-aware, and plain Node `fs`/`child_process` (ripgrep) for
+everything else. This also simplifies the "run from a clean clone" story —
+one `F5` launches the UI and the tool server together, no second process to
+manage or document separately.

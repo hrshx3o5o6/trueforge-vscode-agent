@@ -23,9 +23,11 @@ approvals) inside the editor.
 
 ## Repository layout
 ```
-extension/      the VS Code extension (forked skeleton + our additions)
-mcp-server/     our local MCP tool server (read/search/propose_edit/run_command)
-docs/           the full technical plan — START HERE if you're new to this repo
+extension/                 the VS Code extension (forked skeleton + our additions)
+extension/src/mcpServer/   our MCP tool server — runs INSIDE the extension host
+                            (needs vscode.* APIs for symbol/definition lookups,
+                            which only exist in that process; see docs/DECISIONS.md)
+docs/                      the full technical plan — START HERE if you're new to this repo
 ```
 
 ## Start here if you're picking this up
