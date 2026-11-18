@@ -26,7 +26,7 @@ export function invalidateRepoMapCache(): void {
 }
 
 async function walk(dir: string, root: string, out: string[], limit: number): Promise<void> {
-  if (out.length >= limit) return;
+  if (out.length >= limit) {return;}
   let entries;
   try {
     entries = await fs.readdir(dir, { withFileTypes: true });
@@ -35,9 +35,9 @@ async function walk(dir: string, root: string, out: string[], limit: number): Pr
   }
   entries.sort((a, b) => a.name.localeCompare(b.name));
   for (const entry of entries) {
-    if (out.length >= limit) return;
+    if (out.length >= limit) {return;}
     if (entry.isDirectory()) {
-      if (isIgnoredDir(entry.name)) continue;
+      if (isIgnoredDir(entry.name)) {continue;}
       await walk(path.join(dir, entry.name), root, out, limit);
     } else if (entry.isFile()) {
       const ext = languageHintFromPath(entry.name);
@@ -49,7 +49,7 @@ async function walk(dir: string, root: string, out: string[], limit: number): Pr
 }
 
 function formatFileEntry(relPath: string, symbols: { name: string; kind: string }[]): string {
-  if (symbols.length === 0) return relPath;
+  if (symbols.length === 0) {return relPath;}
   const sigs = symbols.map((s) => (s.kind === "class" ? `class ${s.name}` : `${s.name}()`));
   return `${relPath}: ${sigs.join(", ")}`;
 }
@@ -88,7 +88,7 @@ export async function buildRepoMap(options: { forceRefresh?: boolean } = {}): Pr
   }
   if (testFiles.length > 0) {
     lines.push(`\n# test files (${testFiles.length}, paths only):`);
-    for (const f of testFiles) lines.push(toRelative(f));
+    for (const f of testFiles) {lines.push(toRelative(f));}
   }
 
   const header = `# Repository map (${files.length} source files, budget ${REPO_MAP_TOKEN_BUDGET} tokens)\n`;

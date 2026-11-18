@@ -11,16 +11,33 @@ teammate to know what's real vs. planned.
 - [x] **MCP tool server implemented** (`extension/src/mcpServer/`): all 6
       tools coded — `repo_map`, `search_code`, `read_file`, `propose_edit`
       (+ per-hunk reconstruction), `run_terminal_command`, `go_to_definition`
+- [x] **Phase 3 diff review + approval gate implemented**
+      (`approvalRegistry.ts`, webview per-hunk UI, extension.ts relay):
+      `propose_edit`/`run_terminal_command` tool calls now genuinely
+      block until a human acts in the webview — accept-all/apply-selected
+      (per hunk via checkboxes)/reject-all for edits, run-it/deny for
+      commands. **Architecture pivot from the original plan**: this is
+      our OWN in-process gate, not a TrueForge-native approval event —
+      the installed SDK's reference.md was checked directly and exposes
+      no such concept, so an MCP tool call just doesn't resolve until the
+      user acts. Documented in `proposeEdit.ts`'s header comment.
 - [x] **Extension wiring implemented** (`extension/src/extension.ts`):
       starts the MCP server on activate, registers `openPanel` +
-      `inlineEdit` commands, configuration schema in `package.json`
+      `inlineEdit` commands, configuration schema in `package.json`.
+      Fixed two real bugs caught during this pass: `onToolCall` listeners
+      were stacking (duplicate log lines) every time `wirePanel()` ran
+      more than once; `cancelled` was a per-call closure that would have
+      gone stale if a re-wire happened mid-turn. Both now module-level /
+      dispatched-by-reference correctly.
 - [x] **Resilience wrapper implemented** (`resilience.ts`): automatic
       fallback to a second model on turn failure
 - [x] **Webview panel implemented** (`webview/agentPanel.ts`): plain
-      HTML/CSS/JS chat UI, streams deltas/tool-calls, cancel button
-- [x] `npm install` succeeds, `npx tsc --noEmit` passes clean, `node
-      esbuild.js` produces a working `dist/extension.js` bundle
-      (verified 2026-11-18)
+      HTML/CSS/JS chat UI, streams deltas/tool-calls, cancel button, +
+      per-hunk diff review cards and command-approval cards (Phase 3)
+- [x] `npm install` succeeds, `npx tsc --noEmit` passes clean, `npx
+      eslint src` passes with 0 errors/0 warnings, `node esbuild.js`
+      produces a working `dist/extension.js` bundle (re-verified after
+      Phase 3, 2026-11-18)
 
 ## NOT yet verified (compiles ≠ works — be honest about this gap)
 - [ ] **Never run inside a real Extension Development Host.** All of the
@@ -38,16 +55,20 @@ teammate to know what's real vs. planned.
 - [ ] **MCP server never registered with TrueForge.** Settings ->
       Connectors -> Add MCP Server -> `http://127.0.0.1:4790/mcp` (no
       auth) is still a manual step nobody has done.
-- [ ] **Diff review / approval-event wiring (Phase 3) not started.**
-      `propose_edit` computes diffs correctly in isolation, but nothing
-      listens for TrueForge's tool-approval event yet, and
-      `applyApprovedContent`/`reconstructContentFromAcceptedHunks` in
-      `proposeEdit.ts` are not called from anywhere — they're ready to be
-      wired up, not wired up.
-- [ ] **Cancellation is best-effort only right now** — `extension.ts`
-      stops processing events locally on Cancel, but does not actually
-      abort the underlying TrueForge stream/turn server-side. Needs a
-      real cancel API call once confirmed in the SDK reference.
+- [ ] **Ctrl+Z / undo-cleanliness never actually verified on screen.**
+      `applyApprovedContent` uses `vscode.workspace.applyEdit`, which is
+      undo-stack-integrated by construction — but "should be undoable" is
+      not the same as having pressed Ctrl+Z after a real applied edit and
+      watched it revert cleanly. Do this in the first real run (Phase 3's
+      checklist item, `docs/PLAN.md` line 56).
+- [ ] **Cancellation is still best-effort only** — `extension.ts` stops
+      processing events locally on Cancel, but does not actually abort
+      the underlying TrueForge stream/turn server-side. Needs a real
+      cancel API call once confirmed in the SDK reference.
+- [ ] A rejected/partial edit's tool-result text tells the model what
+      happened in plain English, but was never actually tested against a
+      real model to see if it reliably adapts (e.g. re-reads the file
+      before trying again) — flag any weirdness here during the first run.
 - [ ] Task A/B/C rehearsal — can't start until the above works end-to-end
 - [ ] Demo video
 - [ ] Write-up PDF
@@ -59,14 +80,19 @@ teammate to know what's real vs. planned.
 3. Open this repo's `extension/` folder in VS Code, press F5.
 4. In the new Extension Development Host window, open the `pallets/flask`
    clone as the workspace, run "TrueForge Agent: Open Panel", and send a
-   real message. **This first real run will almost certainly surface bugs**
-   in the untested assumptions above — expect to spend time here before
-   touching Phase 3.
+   real message that should trigger `propose_edit` (e.g. "add a one-line
+   comment to the top of README.md"). **This first real run will almost
+   certainly surface bugs** in the untested assumptions above — expect to
+   spend real time here before moving to Phase 4/5/6.
+5. Specifically watch: does the diff review card actually render with
+   real hunks? Does clicking "Apply selected" actually change the file on
+   disk? Does Ctrl+Z undo it cleanly? Does the tool's return text make the
+   model behave sensibly afterward?
 
 ## Ownership
 _(fill in once the team divides work — suggested split below, not fixed)_
-- MCP tool server (`extension/src/mcpServer/`): built, needs runtime testing — ?
-- Extension webview + diff UI: wiring done, diff/approval handler (Phase 3) not started — ?
+- MCP tool server + Phase 3 approval gate (`extension/src/mcpServer/`): built, needs runtime testing — ?
+- Extension webview + diff UI: built, needs runtime testing — ?
 - TrueForge agent/model config + resilience (Task C): code written, untested against a real server — ?
 - Write-up + video: not started — ?
 

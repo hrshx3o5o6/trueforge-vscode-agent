@@ -1,18 +1,17 @@
 /**
  * propose_edit tool: computes a diff and returns it. NEVER writes to
- * disk itself — TrueForge marks this tool as needing approval (configured
- * in Settings -> Connectors once the server is registered), so the turn
- * pauses here. The extension's approval handler (diffHandler.ts, Phase 3)
- * renders this per-hunk in the editor and only calls
- * vscode.workspace.applyEdit for hunks the user actually accepts — so the
- * *real* write happens in the extension, after human review, never here.
+ * disk itself.
  *
- * ASSUMPTION TO VERIFY (docs/SETUP.md "known gaps"): per-hunk accept/reject
- * requires either (a) TrueForge's approval-resolution API accepting a
- * modified/subset payload, or (b) us treating each hunk as its own
- * propose_edit call so TrueForge's generic per-call approval already gives
- * hunk granularity for free. Design here assumes (b) — one propose_edit
- * call per contiguous hunk — because it needs no unconfirmed API surface.
+ * ARCHITECTURE DECISION (Phase 3, supersedes the comment that used to be
+ * here): human review is implemented as our OWN in-process gate, not a
+ * TrueForge-native "tool needs approval" event — the installed SDK's
+ * reference docs (checked directly, not assumed) expose no such concept.
+ * Since an MCP tool call is just a request our server hasn't responded to
+ * yet, the propose_edit handler in mcpServer.ts calls
+ * `approvalRegistry.requestEditApproval()` and simply does not resolve
+ * until the user acts in the webview (diffReview.ts renders the hunks,
+ * extension.ts relays the decision back). This needs no unconfirmed
+ * TrueForge API surface and gives exact per-hunk granularity for free.
  */
 import * as fs from "node:fs/promises";
 import { createPatch, structuredPatch, applyPatch } from "diff";
@@ -31,6 +30,8 @@ export interface ProposeEditResult {
   unifiedDiff: string;
   hunks: EditHunk[];
   fileExisted: boolean;
+  oldContent: string;
+  newContent: string;
 }
 
 /** Computes hunks for a single file given its full proposed new content.
@@ -58,7 +59,7 @@ export async function proposeEdit(relativePath: string, newContent: string): Pro
     lines: h.lines,
   }));
 
-  return { path: toRelative(absPath), unifiedDiff, hunks, fileExisted };
+  return { path: toRelative(absPath), unifiedDiff, hunks, fileExisted, oldContent, newContent };
 }
 
 /** Called by the extension's approval handler once hunks are accepted —
@@ -97,7 +98,7 @@ export function reconstructContentFromAcceptedHunks(
   acceptedIndices: Set<number>,
 ): string {
   const acceptedHunks = allHunks.filter((_, i) => acceptedIndices.has(i));
-  if (acceptedHunks.length === 0) return oldContent;
+  if (acceptedHunks.length === 0) {return oldContent;}
 
   const header = `Index: ${relativePath}\n===================================================================\n--- ${relativePath}\tcurrent\n+++ ${relativePath}\tproposed\n`;
   const hunkText = acceptedHunks

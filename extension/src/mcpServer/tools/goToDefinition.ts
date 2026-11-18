@@ -13,7 +13,7 @@ import { resolveInWorkspace } from "../workspace.js";
 async function findOneUsage(symbolName: string): Promise<{ uri: vscode.Uri; position: vscode.Position } | null> {
   const escaped = symbolName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const result = await searchCode(`\\b${escaped}\\b`);
-  if (result.hits.length === 0) return null;
+  if (result.hits.length === 0) {return null;}
   const hit = result.hits[0];
   const absPath = resolveInWorkspace(hit.file);
   const uri = vscode.Uri.file(absPath);

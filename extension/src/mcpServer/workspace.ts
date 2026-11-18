@@ -49,8 +49,8 @@ export const DEFAULT_IGNORED_DIRS = new Set([
 ]);
 
 export function isIgnoredDir(name: string): boolean {
-  if (DEFAULT_IGNORED_DIRS.has(name)) return true;
-  if (name.endsWith(".egg-info")) return true;
-  if (name.startsWith(".")) return name !== "." && name !== "..";
+  if (DEFAULT_IGNORED_DIRS.has(name)) {return true;}
+  if (name.endsWith(".egg-info")) {return true;}
+  if (name.startsWith(".")) {return name !== "." && name !== "..";}
   return false;
 }

@@ -23,7 +23,7 @@ export interface RunTurnResult {
 const FAILURE_STATUSES = new Set(["failed", "error", "errored", "cancelled_error"]);
 
 function isFailedTurnDone(event: unknown): boolean {
-  if (typeof event !== "object" || event === null) return false;
+  if (typeof event !== "object" || event === null) {return false;}
   const e = event as { type?: string; state?: { status?: string } };
   return e.type === "turn.done" && !!e.state?.status && FAILURE_STATUSES.has(e.state.status);
 }
@@ -42,7 +42,7 @@ async function runOnce(
   let failed = false;
   for await (const { data: event } of stream.withMetadata()) {
     onEvent(event);
-    if (isFailedTurnDone(event)) failed = true;
+    if (isFailedTurnDone(event)) {failed = true;}
   }
   return { failed };
 }
@@ -57,10 +57,10 @@ export async function runTurnWithFallback(
 ): Promise<RunTurnResult> {
   try {
     const result = await runOnce(client, primary, userMessage, onEvent);
-    if (!result.failed) return { usedFallback: false };
+    if (!result.failed) {return { usedFallback: false };}
   } catch (err) {
     // fall through to fallback attempt below
-    if (!fallback) return { usedFallback: false, error: String(err) };
+    if (!fallback) {return { usedFallback: false, error: String(err) };}
   }
 
   if (!fallback) {

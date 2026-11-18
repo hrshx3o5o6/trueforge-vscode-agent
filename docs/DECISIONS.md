@@ -63,3 +63,17 @@ anything editor-aware, and plain Node `fs`/`child_process` (ripgrep) for
 everything else. This also simplifies the "run from a clean clone" story —
 one `F5` launches the UI and the tool server together, no second process to
 manage or document separately.
+
+## Human approval is our OWN in-process gate, not a TrueForge-native event
+The original Phase 3 plan assumed TrueForge exposes some "tool needs
+approval" event we'd listen for and resolve. Checked the installed SDK's
+own `reference.md` directly (not assumed) before building anything —
+no such concept exists in this version. Rather than block on an
+unconfirmed API or guess at one, `propose_edit`/`run_terminal_command`'s
+tool handlers (in `mcpServer.ts`) just don't resolve their own async
+function until the user acts in the webview — a normal, supported way to
+run a long-lived MCP tool call. `approvalRegistry.ts` holds the pending
+promise resolvers; `extension.ts` relays the webview's decision back into
+it. This needed zero unconfirmed TrueForge API surface, gives exact
+per-hunk granularity (not just per-file), and is simpler than the
+alternative we'd planned around.

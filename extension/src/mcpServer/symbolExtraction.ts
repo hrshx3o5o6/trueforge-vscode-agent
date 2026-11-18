@@ -35,7 +35,7 @@ export function extractTopLevelSymbols(text: string, languageHint: string): Symb
       // Only count indentation <= 1 level (0 or 4 spaces) as "top-level enough"
       // to be useful in a repo map without pulling in every nested helper.
       const indent = line.length - line.trimStart().length;
-      if (indent > 4) continue;
+      if (indent > 4) {continue;}
       const def = line.match(PY_DEF);
       if (def) {
         hits.push({ name: def[1], kind: indent > 0 ? "method" : "function", line: i });

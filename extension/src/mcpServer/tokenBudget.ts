@@ -5,6 +5,6 @@ export function estimateTokens(text: string): number {
 
 export function truncateToTokenBudget(text: string, maxTokens: number): { text: string; truncated: boolean } {
   const maxChars = maxTokens * 4;
-  if (text.length <= maxChars) return { text, truncated: false };
+  if (text.length <= maxChars) {return { text, truncated: false };}
   return { text: text.slice(0, maxChars) + "\n... (truncated to fit the context budget)", truncated: true };
 }

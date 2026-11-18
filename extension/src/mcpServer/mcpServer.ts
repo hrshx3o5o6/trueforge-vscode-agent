@@ -5,6 +5,11 @@
  *
  * Runs INSIDE the extension host (see docs/DECISIONS.md) — started from
  * extension.ts's activate(), stopped on deactivate().
+ *
+ * propose_edit / run_terminal_command gate on human approval via
+ * approvalRegistry.ts (Phase 3) — see the architecture note at the top of
+ * tools/proposeEdit.ts for why this is our own in-process gate rather
+ * than a TrueForge-native approval event.
  */
 import express from "express";
 import { randomUUID } from "node:crypto";
@@ -16,23 +21,27 @@ import type * as http from "node:http";
 import { buildRepoMap, REPO_MAP_TOKEN_BUDGET } from "./tools/repoMap.js";
 import { searchCode, SEARCH_MAX_RESULTS } from "./tools/searchCode.js";
 import { readFile } from "./tools/readFile.js";
-import { proposeEdit } from "./tools/proposeEdit.js";
+import { proposeEdit, applyApprovedContent, reconstructContentFromAcceptedHunks } from "./tools/proposeEdit.js";
 import { runTerminalCommand } from "./tools/runTerminalCommand.js";
 import { goToDefinition } from "./tools/goToDefinition.js";
-
-export interface PendingEdit {
-  requestId: string;
-  path: string;
-  result: Awaited<ReturnType<typeof proposeEdit>>;
-}
+import {
+  requestEditApproval,
+  requestCommandApproval,
+  onEditProposed,
+  onCommandProposed,
+  type PendingEditRequest,
+  type PendingCommandRequest,
+} from "./approvalRegistry.js";
 
 export interface McpServerHandle {
   close: () => Promise<void>;
   port: number;
-  /** Fired whenever propose_edit / run_terminal_command is invoked, so
-   * extension.ts can render it in the webview even before/alongside
-   * TrueForge's own approval event — belt-and-braces for the demo. */
+  /** Fired whenever any tool is invoked — a lightweight activity log for the webview. */
   onToolCall: (listener: (name: string, args: unknown) => void) => void;
+  /** Fired when propose_edit is waiting on human review (Phase 3). */
+  onEditProposed: (listener: (req: PendingEditRequest) => void) => void;
+  /** Fired when run_terminal_command is waiting on human approval. */
+  onCommandProposed: (listener: (req: PendingCommandRequest) => void) => void;
 }
 
 function createMcpServer(notify: (name: string, args: unknown) => void): McpServer {
@@ -100,8 +109,8 @@ function createMcpServer(notify: (name: string, args: unknown) => void): McpServ
     "propose_edit",
     {
       description:
-        "Propose writing new content to a file. NEVER writes directly — this pauses for human review in the " +
-        "editor (per-hunk accept/reject). Call once per file for a multi-file change.",
+        "Propose writing new content to a file. NEVER writes directly — pauses here for human review in the " +
+        "editor (per-hunk accept/reject) before returning. Call once per file for a multi-file change.",
       inputSchema: {
         path: z.string().describe("Workspace-relative file path (created if it doesn't exist)"),
         new_content: z.string().describe("The full proposed new content of the file"),
@@ -110,11 +119,35 @@ function createMcpServer(notify: (name: string, args: unknown) => void): McpServ
     async ({ path, new_content }) => {
       notify("propose_edit", { path });
       const result = await proposeEdit(path, new_content);
+
+      if (result.hunks.length === 0) {
+        return { content: [{ type: "text", text: `No changes: ${result.path} already matches the proposed content.` }] };
+      }
+
+      // Blocks here — does not resolve until the webview relays the
+      // user's decision via approvalRegistry.resolveEdit(). See
+      // mcpServer.ts module doc + proposeEdit.ts's architecture note.
+      const decision = await requestEditApproval(result);
+
+      if (decision.acceptedHunkIndices.size === 0) {
+        return { content: [{ type: "text", text: `User rejected all ${result.hunks.length} hunk(s) for ${result.path}. No changes were made.` }] };
+      }
+
+      const finalContent = reconstructContentFromAcceptedHunks(
+        result.path,
+        result.oldContent,
+        result.hunks,
+        decision.acceptedHunkIndices,
+      );
+      await applyApprovedContent(result.path, finalContent);
+
+      const acceptedCount = decision.acceptedHunkIndices.size;
+      const partial = acceptedCount < result.hunks.length;
       return {
         content: [
           {
             type: "text",
-            text: `Proposed ${result.hunks.length} hunk(s) for ${result.path}:\n\n${result.unifiedDiff}`,
+            text: `Applied ${acceptedCount} of ${result.hunks.length} hunk(s) to ${result.path}.${partial ? " Some hunks were rejected by the user — re-read the file if you need its exact current state." : ""}`,
           },
         ],
       };
@@ -124,11 +157,15 @@ function createMcpServer(notify: (name: string, args: unknown) => void): McpServ
   server.registerTool(
     "run_terminal_command",
     {
-      description: "Run a shell command in the workspace root. Approval-gated; 30s timeout.",
+      description: "Run a shell command in the workspace root. Pauses for human approval before running; 30s timeout.",
       inputSchema: { command: z.string() },
     },
     async ({ command }) => {
       notify("run_terminal_command", { command });
+      const approved = await requestCommandApproval(command);
+      if (!approved) {
+        return { content: [{ type: "text", text: `User declined to run: ${command}` }] };
+      }
       const result = await runTerminalCommand(command);
       const text = `$ ${command}\n(exit ${result.exitCode}${result.timedOut ? ", TIMED OUT" : ""})\n${result.stdout}${result.stderr ? "\n--- stderr ---\n" + result.stderr : ""}`;
       return { content: [{ type: "text", text }] };
@@ -145,7 +182,7 @@ function createMcpServer(notify: (name: string, args: unknown) => void): McpServ
     async ({ symbol }) => {
       notify("go_to_definition", { symbol });
       const hit = await goToDefinition(symbol);
-      if (!hit) return { content: [{ type: "text", text: `No definition found for "${symbol}".` }] };
+      if (!hit) {return { content: [{ type: "text", text: `No definition found for "${symbol}".` }] };}
       return { content: [{ type: "text", text: `${hit.file}:${hit.line + 1}: ${hit.preview}` }] };
     },
   );
@@ -192,5 +229,7 @@ export async function startMcpServer(port: number): Promise<McpServerHandle> {
     port,
     close: () => new Promise((resolve) => server.close(() => resolve())),
     onToolCall: (listener) => listeners.push(listener),
+    onEditProposed: (listener) => onEditProposed(listener),
+    onCommandProposed: (listener) => onCommandProposed(listener),
   };
 }

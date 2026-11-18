@@ -50,10 +50,18 @@ the extension to it. Tools, in priority order:
 - [ ] Webview panel for agent-mode chat (reuse VS Code's built-in webview APIs; keep it plain HTML/CSS/JS per `docs/DECISIONS.md` — no framework needed for an MVP)
 - [ ] Inline-edit command: selection → instruction prompt → single-turn session → diff rendering
 
-### Phase 3 — diff review + undo (B2)
-- [ ] Render `propose_edit` tool-approval events as a per-hunk diff view
-- [ ] Accept/reject per hunk; only accepted hunks go through `vscode.workspace.applyEdit`
-- [ ] Verify Ctrl+Z actually undoes an applied edit cleanly (must be shown on screen in the video)
+### Phase 3 — diff review + undo (B2) — IMPLEMENTED 2026-11-18
+- [x] Render `propose_edit` as a per-hunk diff view — done via our own
+      in-process approval gate (`approvalRegistry.ts`), not a TrueForge-
+      native approval event (none exists in the installed SDK — see
+      `docs/DECISIONS.md`)
+- [x] Accept/reject per hunk; only accepted hunks go through
+      `vscode.workspace.applyEdit` (`reconstructContentFromAcceptedHunks`
+      + `applyApprovedContent` in `proposeEdit.ts`)
+- [ ] Verify Ctrl+Z actually undoes an applied edit cleanly — code is
+      written to use the undo-stack-integrated API, but this has not
+      been watched happen on screen yet (needs a real Extension
+      Development Host run, see `docs/STATUS.md`)
 
 ### Phase 4 — streaming + cancellation (A3)
 - [ ] Token deltas (`model.message.delta`) streamed into the webview live

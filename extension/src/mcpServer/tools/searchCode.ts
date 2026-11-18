@@ -32,8 +32,8 @@ function runRipgrep(args: string[], cwd: string): Promise<string> {
     proc.on("error", reject);
     proc.on("close", (code) => {
       // rg exits 1 when there are simply no matches — not an error for us.
-      if (code === 0 || code === 1) resolve(stdout);
-      else reject(new Error(stderr || `ripgrep exited with code ${code}`));
+      if (code === 0 || code === 1) {resolve(stdout);}
+      else {reject(new Error(stderr || `ripgrep exited with code ${code}`));}
     });
   });
 }
@@ -41,7 +41,7 @@ function runRipgrep(args: string[], cwd: string): Promise<string> {
 export async function searchCode(query: string, pathGlob?: string): Promise<SearchResult> {
   const root = getWorkspaceRoot();
   const args = ["--line-number", "--no-heading", "--max-count", "200", "--color", "never"];
-  if (pathGlob) args.push("--glob", pathGlob);
+  if (pathGlob) {args.push("--glob", pathGlob);}
   args.push("--", query, ".");
 
   const output = await runRipgrep(args, root);
@@ -53,7 +53,7 @@ export async function searchCode(query: string, pathGlob?: string): Promise<Sear
   for (const line of lines.slice(0, SEARCH_MAX_RESULTS)) {
     // ripgrep --no-heading format: path:lineNumber:content
     const match = line.match(/^(.+?):(\d+):(.*)$/);
-    if (!match) continue;
+    if (!match) {continue;}
     const [, filePath, lineNumStr, content] = match;
     const snippet = content.length > SEARCH_SNIPPET_MAX_CHARS ? content.slice(0, SEARCH_SNIPPET_MAX_CHARS) + "…" : content;
     hits.push({ file: toRelative(filePath), line: Number(lineNumStr), snippet: snippet.trim() });

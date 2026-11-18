@@ -20,7 +20,7 @@ export async function getDocumentSymbols(absolutePath: string): Promise<SymbolHi
       "vscode.executeDocumentSymbolProvider",
       uri,
     );
-    if (!symbols || symbols.length === 0) return null;
+    if (!symbols || symbols.length === 0) {return null;}
     const hits: SymbolHit[] = [];
     const flatten = (list: vscode.DocumentSymbol[], depth: number) => {
       for (const s of list) {
@@ -40,7 +40,7 @@ export async function getDocumentSymbols(absolutePath: string): Promise<SymbolHi
             hits.push({ name: s.name, kind, line: s.range.start.line });
           }
         }
-        if (s.children?.length) flatten(s.children, depth + 1);
+        if (s.children?.length) {flatten(s.children, depth + 1);}
       }
     };
     flatten(symbols, 0);
@@ -56,7 +56,7 @@ export async function getSymbolsWithFallback(absolutePath: string, text: string)
   source: "editor" | "regex";
 }> {
   const native = await getDocumentSymbols(absolutePath);
-  if (native && native.length > 0) return { symbols: native, source: "editor" };
+  if (native && native.length > 0) {return { symbols: native, source: "editor" };}
   const hint = languageHintFromPath(absolutePath);
   return { symbols: extractTopLevelSymbols(text, hint), source: "regex" };
 }
@@ -77,14 +77,14 @@ export async function goToDefinition(
   searchForUsage: (symbolName: string) => Promise<{ uri: vscode.Uri; position: vscode.Position } | null>,
 ): Promise<DefinitionHit | null> {
   const usage = await searchForUsage(symbolName);
-  if (!usage) return null;
+  if (!usage) {return null;}
   try {
     const locations = await vscode.commands.executeCommand<(vscode.Location | vscode.LocationLink)[] | undefined>(
       "vscode.executeDefinitionProvider",
       usage.uri,
       usage.position,
     );
-    if (!locations || locations.length === 0) return null;
+    if (!locations || locations.length === 0) {return null;}
     const first = locations[0];
     const uri = "uri" in first ? first.uri : first.targetUri;
     const range = "range" in first ? first.range : first.targetRange;
