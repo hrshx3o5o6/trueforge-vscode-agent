@@ -11,9 +11,10 @@ open-source agent harness) — built for the **2nd Techfest Forge-a-thon**
 Editor capabilities (read/search file, propose an edit, run a command) are
 exposed to the agent as **MCP tools**, not handled secretly inside the
 extension. TrueForge runs the actual tool loop — model calls, streaming,
-tool approval, context management. Our extension is a thin client: it opens
-sessions, streams turns, and renders TrueForge's events (diffs, tool calls,
-approvals) inside the editor.
+context management, deciding which tools to call and when. Human approval
+for `propose_edit`/`run_terminal_command` is our own in-process gate (see
+`docs/DECISIONS.md`) since the installed TrueForge SDK has no native
+approval event; our extension renders it as a per-hunk diff review card.
 
 ## Fork declaration (required by the rules)
 - **Upstream:** [`sst/opencode`](https://github.com/sst/opencode), subdirectory `sdks/vscode/`
