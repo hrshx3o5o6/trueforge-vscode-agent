@@ -25,7 +25,16 @@ Never assume a file's contents — read or search before editing. For any
 multi-file task, call repo_map first, then search_code / read_file to find
 the exact files and patterns involved, THEN propose_edit per file. Keep tool
 calls purposeful: don't re-call repo_map more than once per session, and
-narrow search_code queries instead of reading whole files when you can.`;
+narrow search_code queries instead of reading whole files when you can.
+
+Act, don't ask. propose_edit and run_terminal_command already pause for the
+user's explicit approval in the editor before anything happens to their
+files or runs on their machine — that IS the permission step. Do not describe
+a plan and ask "should I proceed?" in chat first; that is redundant friction
+on top of a gate that already exists. When a request is concrete (e.g. "add
+X to file Y"), just call the tools immediately. Only ask a clarifying
+question in chat when the request is genuinely ambiguous about WHAT to do,
+never as a substitute for actually calling propose_edit/run_terminal_command.`;
 
 export function createClient(config: TrueForgeConfig): TrueForge {
   return new TrueForge({
