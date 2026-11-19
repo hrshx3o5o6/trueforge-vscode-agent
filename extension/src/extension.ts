@@ -15,6 +15,15 @@ let config: TrueForgeConfig | undefined;
  * guarantee the handler is attached) never orphans an in-flight turn's
  * cancel flag in a stale closure. */
 let turnCancelled = false;
+/** Session ID for the open chat panel's ongoing conversation — persisted
+ * across "Send" clicks so createTurnStream reuses the same TrueForge
+ * session instead of starting a fresh, history-less one every turn (the
+ * original bug: client.sessions.create() was called on every message,
+ * confirmed live via the TrueForge server log showing one new session
+ * per chat message instead of one per conversation). Reset to undefined
+ * whenever a genuinely NEW panel is created (not just revealed), so a
+ * closed-and-reopened chat starts a clean conversation. */
+let chatSessionId: string | undefined;
 
 function loadConfig(): TrueForgeConfig {
   const settings = vscode.workspace.getConfiguration("trueforgeAgent");
@@ -64,7 +73,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push(
     vscode.commands.registerCommand("trueforgeAgent.openPanel", () => {
+      const isNewPanel = !AgentPanel.current;
       const panel = AgentPanel.createOrShow(context.extensionUri);
+      if (isNewPanel) {
+        chatSessionId = undefined;
+      }
       wirePanel(panel);
     }),
   );
@@ -149,8 +162,10 @@ function wirePanel(panel: AgentPanel): void {
         }
       },
       () => panel.post({ type: "fallback" }),
+      chatSessionId,
     );
 
+    chatSessionId = result.sessionId || chatSessionId;
     panel.post({ type: "done", usedFallback: result.usedFallback, error: result.error });
   });
 }
