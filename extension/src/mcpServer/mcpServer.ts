@@ -221,6 +221,24 @@ export async function startMcpServer(port: number): Promise<McpServerHandle> {
     await transport.handleRequest(req, res, req.body);
   });
 
+  // The Streamable HTTP transport spec requires GET (server-to-client
+  // notification stream) and DELETE (session termination) on the SAME
+  // endpoint, not just POST. Missing these isn't a cosmetic gap — a real
+  // client's GET probe fell through to Express's generic 404 before this
+  // fix (caught during the first live test against TrueForge). Both just
+  // need an existing session's transport; if there isn't one, 400.
+  const handleSessionRequest = async (req: express.Request, res: express.Response): Promise<void> => {
+    const sessionId = req.headers["mcp-session-id"] as string | undefined;
+    const transport = sessionId ? transports.get(sessionId) : undefined;
+    if (!transport) {
+      res.status(400).send("No active MCP session for this request. POST to /mcp first to initialize one.");
+      return;
+    }
+    await transport.handleRequest(req, res);
+  };
+  app.get("/mcp", handleSessionRequest);
+  app.delete("/mcp", handleSessionRequest);
+
   const server: http.Server = await new Promise((resolve) => {
     const s = app.listen(port, "127.0.0.1", () => resolve(s));
   });
