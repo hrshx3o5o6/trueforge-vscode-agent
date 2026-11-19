@@ -225,19 +225,37 @@ export async function startMcpServer(port: number): Promise<McpServerHandle> {
   // notification stream) and DELETE (session termination) on the SAME
   // endpoint, not just POST. Missing these isn't a cosmetic gap — a real
   // client's GET probe fell through to Express's generic 404 before this
-  // fix (caught during the first live test against TrueForge). Both just
-  // need an existing session's transport; if there isn't one, 400.
-  const handleSessionRequest = async (req: express.Request, res: express.Response): Promise<void> => {
+  // fix (caught during the first live test against TrueForge).
+  //
+  // Second real-world correction: a client (TrueForge, observed live) may
+  // send GET as its very FIRST request, before ever POSTing to create a
+  // session — e.g. to probe the endpoint or open a server-push stream
+  // speculatively. We don't support session-less server push, and the
+  // spec's documented answer for that is 405 Method Not Allowed, not a
+  // generic error — clients check for exactly that status to know "fine,
+  // POST-only is OK, proceed with request/response." A custom 400 here
+  // was being treated as a hard connector failure.
+  app.get("/mcp", async (req, res) => {
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
     const transport = sessionId ? transports.get(sessionId) : undefined;
     if (!transport) {
-      res.status(400).send("No active MCP session for this request. POST to /mcp first to initialize one.");
+      res.status(405).set("Allow", "POST").send("Method Not Allowed: this server does not support a session-less GET stream. POST to /mcp to start a session.");
       return;
     }
     await transport.handleRequest(req, res);
-  };
-  app.get("/mcp", handleSessionRequest);
-  app.delete("/mcp", handleSessionRequest);
+  });
+
+  app.delete("/mcp", async (req, res) => {
+    const sessionId = req.headers["mcp-session-id"] as string | undefined;
+    const transport = sessionId ? transports.get(sessionId) : undefined;
+    if (!transport) {
+      // Nothing to terminate — treat as already-closed, not an error.
+      res.status(204).end();
+      return;
+    }
+    await transport.handleRequest(req, res);
+    transports.delete(sessionId!);
+  });
 
   const server: http.Server = await new Promise((resolve) => {
     const s = app.listen(port, "127.0.0.1", () => resolve(s));
