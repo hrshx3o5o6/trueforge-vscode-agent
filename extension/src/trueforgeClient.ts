@@ -34,7 +34,7 @@ export interface AgentDefinition {
   mcpServer: {
     name: string;
     description: string;
-    preloadTools?: string[];
+    preload?: boolean;
     requireApprovalForTools?: string[];
   };
   config?: TrueForgeApi.RuntimeConfig;
@@ -76,10 +76,11 @@ export function buildAgentSpec(model: AgentModelConfig): { spec: TrueForgeApi.Ag
         {
           name: def.mcpServer.name,
           enableTools: ["@all"],
-          // Deferred tool loading: the core tools are loaded eagerly, the
-          // rest (go_to_definition, run_terminal_command) are discovered on
-          // demand, keeping their schemas out of every prompt.
-          preloadTools: def.mcpServer.preloadTools,
+          // Load all six schemas up front. TrueForge's deferred discovery
+          // (preload:false) failed in local mode during testing — the model's
+          // list_tools call hit "MCP server 'deferred-tools' not found" — and
+          // six small schemas are cheap.
+          preload: def.mcpServer.preload ?? true,
           requireApprovalForTools: def.mcpServer.requireApprovalForTools,
         },
       ],

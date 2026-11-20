@@ -5,15 +5,24 @@
   "mcpServer": {
     "name": "trueforge-vscode-agent",
     "description": "VS Code editor tools: repo map, code search, file reading, go-to-definition, reviewed edits and approved commands.",
-    "preloadTools": ["repo_map", "search_code", "read_file", "propose_edit"],
-    "requireApprovalForTools": ["propose_edit", "run_terminal_command"]
+    "requireApprovalForTools": [
+      "propose_edit",
+      "run_terminal_command"
+    ],
+    "preload": true
   },
   "config": {
     "iterationLimit": 80,
     "contextManagement": {
-      "compaction": { "enabled": true },
-      "largeToolResponse": { "enabled": true }
+      "compaction": {
+        "enabled": true
+      },
+      "largeToolResponse": {
+        "enabled": true
+      }
     },
-    "dynamicSubAgents": { "enabled": true }
+    "dynamicSubAgents": {
+      "enabled": true
+    }
   }
 }

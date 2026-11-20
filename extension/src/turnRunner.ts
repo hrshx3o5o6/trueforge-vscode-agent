@@ -15,7 +15,7 @@
  * Workspace consistency is the caller's job via beforeRetry/onCancel
  * hooks (extension.ts rolls back edits applied by a failed attempt).
  */
-import type { TrueForge, TrueForgeApi } from "@truefoundry/trueforge-sdk";
+import { mergeEventDelta, type TrueForge, type TrueForgeApi } from "@truefoundry/trueforge-sdk";
 import { buildAgentSpec, type AgentModelConfig } from "./trueforgeClient.js";
 
 export interface ApprovalRequest {
@@ -57,7 +57,14 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 function errorText(err: unknown): string {
   const e = err as { message?: string; statusCode?: number; body?: { error?: { message?: string } } };
   const detail = e?.body?.error?.message ?? e?.message ?? String(err);
-  return e?.statusCode ? `HTTP ${e.statusCode}: ${detail}` : detail;
+  return withHint(e?.statusCode ? `HTTP ${e.statusCode}: ${detail}` : detail);
+}
+
+function withHint(message: string): string {
+  if (message.includes("Outbound URL blocked")) {
+    return message + ` — TrueForge must be started with OUTBOUND_URL_ALLOWED_HOSTS='["localhost","127.0.0.1"]' to reach the editor's MCP server.`;
+  }
+  return message;
 }
 
 export class TurnController {
@@ -130,7 +137,23 @@ export class TurnController {
   }
 
   private async attempt(sessionId: string, userMessage: string): Promise<AttemptOutcome> {
-    const toolCalls = new Map<string, { name: string; args: Record<string, unknown> }>();
+    // Tool calls arrive only as model.message.delta fragments: keep the
+    // base model.message per thread and merge deltas into it (SDK helper),
+    // then read complete calls (name + JSON args) when approval is needed.
+    const messages = new Map<string, TrueForgeApi.ModelMessageEvent>(); // by event id
+    const currentByThread = new Map<string, TrueForgeApi.ModelMessageEvent>();
+    const reported = new Set<string>();
+    const findCall = (id: string): { name: string; args: Record<string, unknown> } | undefined => {
+      for (const msg of messages.values()) {
+        const tc = msg.toolCalls?.find((t) => t.id === id);
+        if (!tc) {continue;}
+        const info = tc.toolInfo as { type?: string; name?: string } | undefined;
+        let args: Record<string, unknown> = {};
+        try { args = JSON.parse(tc.function?.arguments || "{}"); } catch { /* partial JSON */ }
+        return { name: info?.type === "mcp" && info.name ? info.name : tc.function?.name ?? "unknown", args };
+      }
+      return undefined;
+    };
     const pendingApprovals: Promise<void>[] = [];
     let turnId: string | undefined;
     let outcome: AttemptOutcome | undefined;
@@ -151,28 +174,33 @@ export class TurnController {
         case "turn.created":
           turnId = e.turnId;
           break;
-        case "model.message.delta":
+        case "model.message.delta": {
           if (e.content) {this.cb.onDelta(e.content);}
+          const base = currentByThread.get(e.threadId);
+          if (base && e.toolCalls?.length) {mergeEventDelta(base, e);}
           break;
+        }
         case "model.message":
-          for (const tc of e.toolCalls ?? []) {
-            const name = tc.toolInfo?.type === "mcp" ? tc.toolInfo.name : tc.function.name;
-            let args: Record<string, unknown> = {};
-            try { args = JSON.parse(tc.function.arguments || "{}"); } catch { /* keep {} */ }
-            toolCalls.set(tc.id, { name, args });
-            this.cb.onToolCall(name, args);
+          messages.set(e.id, e);
+          currentByThread.set(e.threadId, e);
+          break;
+        case "tool.response":
+          if (!reported.has(e.toolCallId)) {
+            reported.add(e.toolCallId);
+            const call = findCall(e.toolCallId);
+            if (call) {this.cb.onToolCall(call.name, call.args);}
           }
           break;
         case "tool.approval_required":
           for (const ref of e.toolCalls) {
-            pendingApprovals.push(this.answerApproval(sessionId, () => turnId, e.threadId, ref.id, toolCalls.get(ref.id)));
+            pendingApprovals.push(this.answerApproval(sessionId, () => turnId, e.threadId, ref.id, findCall(ref.id)));
           }
           break;
         case "turn.done":
           outcome =
             e.state.status === "done" ? { status: "done" }
             : e.state.status === "cancelled" ? { status: "cancelled" }
-            : { status: "failed", error: e.state.message };
+            : { status: "failed", error: withHint(e.state.message) };
           break;
       }
     };
