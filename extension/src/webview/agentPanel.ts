@@ -90,7 +90,7 @@ export class AgentPanel {
     const sendBtn = document.getElementById('send');
     const cancelBtn = document.getElementById('cancel');
 
-    function esc(s) { return String(s).replace(/</g, '&lt;'); }
+    function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 
     function append(html) {
       const div = document.createElement('div');

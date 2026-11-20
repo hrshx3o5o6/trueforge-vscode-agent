@@ -257,12 +257,27 @@ export async function startMcpServer(port: number): Promise<McpServerHandle> {
     transports.delete(sessionId!);
   });
 
-  const server: http.Server = await new Promise((resolve) => {
-    const s = app.listen(port, "127.0.0.1", () => resolve(s));
-  });
+  // If the preferred port is taken (a second VS Code window, a stale
+  // process), fall back to an OS-assigned port instead of hanging
+  // activate() forever — the connector is re-registered with whatever
+  // port we actually got (see trueforgeSetup.ts).
+  const listenOn = (p: number): Promise<http.Server> =>
+    new Promise((resolve, reject) => {
+      const s = app.listen(p, "127.0.0.1");
+      s.once("listening", () => resolve(s));
+      s.once("error", reject);
+    });
+  let server: http.Server;
+  try {
+    server = await listenOn(port);
+  } catch {
+    server = await listenOn(0);
+  }
+  const address = server.address();
+  const actualPort = typeof address === "object" && address ? address.port : port;
 
   return {
-    port,
+    port: actualPort,
     close: () => new Promise((resolve) => server.close(() => resolve())),
     onToolCall: (listener) => listeners.push(listener),
     onEditProposed: (listener) => onEditProposed(listener),
