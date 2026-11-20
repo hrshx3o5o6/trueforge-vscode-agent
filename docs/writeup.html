@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  @page { size: A4; margin: 18mm 16mm; }
+  body { font-family: -apple-system, 'Helvetica Neue', Arial, sans-serif; font-size: 10.5pt; line-height: 1.45; color: #1a1a1a; max-width: 780px; margin: 0 auto; }
+  h1 { font-size: 19pt; margin-bottom: 2px; }
+  h2 { font-size: 13.5pt; border-bottom: 2px solid #1e1e1e; padding-bottom: 3px; margin-top: 22px; }
+  .subtitle { color: #555; font-size: 10pt; margin-bottom: 18px; }
+  code, .mono { font-family: 'SF Mono', Menlo, monospace; font-size: 9.3pt; background: #f2f2f2; padding: 1px 4px; border-radius: 3px; }
+  pre { background: #f2f2f2; padding: 8px 10px; border-radius: 5px; font-size: 9pt; overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; margin: 8px 0 14px 0; font-size: 9.3pt; }
+  th, td { border: 1px solid #ccc; padding: 4px 7px; text-align: left; vertical-align: top; }
+  th { background: #eee; }
+  img.diagram { max-width: 100%; display: block; margin: 10px auto; border: 1px solid #ddd; border-radius: 4px; }
+  .flag { background: #fff3bf; border-left: 3px solid #f08c00; padding: 6px 10px; font-size: 9.3pt; margin: 8px 0; }
+  ul, ol { margin: 4px 0; padding-left: 20px; }
+  li { margin: 2px 0; }
+  .meta { font-size: 9.3pt; color: #555; }
+</style>
+</head>
+<body>
+
+<h1>TrueForge VS Code Agent &mdash; Techfest 2026-27 Forge-a-thon</h1>
+<div class="subtitle">Team <b>dihhbug</b> &middot; Round 1 submission &middot; Repo: github.com/hrshx3o5o6/trueforge-vscode-agent</div>
+
+<h2>1. Team</h2>
+<p>Harshavardhan Kangala Dayanand &mdash; VIT Vellore, CS undergrad &mdash; hkangala@gmail.com &mdash; GitHub: <span class="mono">hrshx3o5o6</span></p>
+<div class="flag"><b>TODO before final submission:</b> add remaining team member names / college / GitHub handles here if "dihhbug" is not a solo submission.</div>
+
+<h2>2. Starting point</h2>
+<p>Forked <span class="mono">sst/opencode</span>, subdirectory <span class="mono">sdks/vscode/</span>, commit <span class="mono">521ceac004e59fbbfca0929596107cd8430f2b26</span>. The official extension is a thin terminal launcher; we built the webview chat/diff-review UI and the entire TrueForge SDK integration ourselves on top of its activation scaffolding. <b>The upstream extension's own agent loop was removed entirely</b> &mdash; every action the agent takes runs through a TrueForge session, never a direct model-provider call.</p>
+
+<h2>3. Architecture on TrueForge</h2>
+<p>The extension's webview panel sends user turns to TrueForge's SDK (<span class="mono">sessions.createTurnStream</span>), which streams back model text and tool-call events. Editor capabilities are exposed to the agent as real MCP tools served by an in-process MCP server (it needs <span class="mono">vscode.*</span> symbol/definition APIs, so it cannot run standalone) &mdash; the agent decides what to read/edit, not our extension code.</p>
+<img class="diagram" src="file:///Users/harsha/Projects/trueforge-vscode-agent/docs/diagrams/png/architecture.png">
+<p><b>The six MCP tools:</b> <span class="mono">repo_map</span>, <span class="mono">search_code</span>, <span class="mono">read_file</span> (read-only) and <span class="mono">propose_edit</span>, <span class="mono">run_terminal_command</span> (approval-gated, orange in the diagram), plus <span class="mono">go_to_definition</span> which wraps VS Code's own <span class="mono">executeDefinitionProvider</span> &mdash; editor-native and far cheaper than grep for "where is X actually defined," a genuine differentiator versus grep-only forks.</p>
+<p><b>TrueForge's own native tool-approval mechanism drives the diff-review flow</b> &mdash; we did not build a separate approval system. <span class="mono">propose_edit</span> returns a diff and is marked needs-approval; TrueForge's <span class="mono">tool.approval_required</span> event pauses the turn until the extension's approval handler resolves it, and only then does <span class="mono">vscode.workspace.applyEdit</span> (per accepted hunk, undo-stack integrated) touch disk. This is also what makes cancellation safe: if a turn is cancelled before approval, nothing was ever written.</p>
+<p>Connector registration is fully automatic: on activation the extension starts the MCP server with a fresh bearer token and self-registers it with TrueForge; the agent definition (<span class="mono">coding-agent.json</span>) attaches it by name.</p>
+
+<h2>4. How context is selected</h2>
+<p>Two layers, by design. <b>Layer 1</b> (before the turn): the editor assembles a small, budgeted opening bid under <span class="mono">trueforgeAgent.contextTokenBudget</span> (default <b>6,000 tokens</b>) &mdash; explicit <span class="mono">@file</span>/<span class="mono">@symbol</span> mentions first, then automatic retrieval for agent mode: ripgrep keyword counts, IDF &times; BM25-style saturated scoring with file-length normalisation, one reserved slot each for the best source/test/doc file (tests and docs sharing a name stem with the top source file are boosted), and only &plusmn;2-line windows around matches &mdash; never whole files. <b>Layer 2</b>: the agent's own tools carry hard per-call budgets &mdash; <span class="mono">repo_map</span> capped at <b>4,000 tokens</b> (directory tree + top-level symbols only, via VS Code's own <span class="mono">DocumentSymbolProvider</span>, cached and invalidated on save), <span class="mono">read_file</span> capped at <b>200 lines per call</b> (no range on a large file returns an outline, never the full text), <span class="mono">search_code</span> capped at 20 results / ~300 chars per snippet.</p>
+<img class="diagram" src="file:///Users/harsha/Projects/trueforge-vscode-agent/docs/diagrams/png/context_assembly.png">
+<p>The panel renders a visible <b>"Context selected"</b> card listing every file chosen, why, and its token cost &mdash; on <span class="mono">pallets/flask</span> 3.1.3 with the real Task B wording it selects <span class="mono">src/flask/cli.py</span>, <span class="mono">tests/test_cli.py</span> and <span class="mono">docs/cli.rst</span> in about 4.4k tokens, well under budget. Total tool-context per turn stays under ~10k tokens even on this 17k-line repo. This design is also where B4's "meaningful subagent use" comes from: a scout subagent calls only the read-only tools and hands a condensed summary to a separate editing agent &mdash; one coherent design covering both B1 and B4, not two bolted-on features.</p>
+
+<h2>5. Model setup</h2>
+<table>
+<tr><th>Role</th><th>Model</th><th>Where it runs</th><th>Approx. cost</th></tr>
+<tr><td>Primary</td><td class="mono">openai/gpt-5-4-mini</td><td>OpenAI API, via TrueForge</td><td>$0 &mdash; free tier / own trial credits</td></tr>
+<tr><td>Fallback</td><td class="mono">ollama/qwen25-7b</td><td>Local Ollama</td><td>$0 &mdash; runs locally</td></tr>
+</table>
+<p>Switching models is a VS Code setting, no code change: <span class="mono">trueforgeAgent.primaryModel</span> / <span class="mono">trueforgeAgent.fallbackModel</span>, read at runtime from <span class="mono">coding-agent.json</span> so any model configured in TrueForge works.</p>
+
+<h2>6. Scorecard</h2>
+<div class="flag"><b>Fill in real timestamps after recording</b> &mdash; placeholders below map 1:1 to the rehearsed script; replace with the actual video's timecodes before submitting.</div>
+<table>
+<tr><th>Criterion</th><th>Timestamp</th><th>Claim</th></tr>
+<tr><td>A1 Inline edit</td><td>0:00&ndash;0:25</td><td>Per-hunk diff accept/reject shown for <span class="mono">get_debug_flag</span>, verified via <span class="mono">FLASK_DEBUG=off</span> check printing <span class="mono">False</span></td></tr>
+<tr><td>A2 Agent mode</td><td>0:26&ndash;1:50</td><td>3+ files edited (<span class="mono">cli.py</span>, <span class="mono">test_cli.py</span>, <span class="mono">cli.rst</span>), none named by the user</td></tr>
+<tr><td>A3 Streaming/cancel</td><td>1:51&ndash;2:10</td><td>Turn cancelled mid-stream, <span class="mono">git status</span> shown clean immediately after</td></tr>
+<tr><td>B1 Context assembly</td><td>0:35&ndash;0:55</td><td>"Context selected" card + <span class="mono">repo_map</span>/<span class="mono">search_code</span>/<span class="mono">read_file</span> tool-call log visible before any edit</td></tr>
+<tr><td>B2 Diff safety</td><td>0:10&ndash;0:22, 2:11&ndash;2:20</td><td>Per-hunk review shown; Ctrl+Z undo shown working on screen</td></tr>
+<tr><td>B3 Resilience</td><td>2:21&ndash;3:10</td><td>Primary model broken, automatic fallback to <span class="mono">ollama/qwen25-7b</span> with zero user action, <span class="mono">git status</span> clean throughout</td></tr>
+<tr><td>B4 TrueForge depth</td><td>0:26&ndash;0:55, 1:30&ndash;1:50</td><td>Scout/editor subagent split visible in the TrueForge session view; native <span class="mono">tool.approval_required</span> drives the diff review</td></tr>
+</table>
+
+<h2>7. Tools used</h2>
+<p>Built with Claude Code (Anthropic) as the primary coding assistant for implementation, debugging live integration issues against a running TrueForge instance, and this write-up/diagrams. All architecture decisions, the live debugging (SSL/binding issues, MCP spec compliance, session-persistence bug, duplicate-listener bug), and the final working build were driven and verified by the team against a real running TrueForge server &mdash; not generated and left unverified.</p>
+
+<h2>8. Known limitations and what we'd do with another month</h2>
+<ul>
+<li>No OCR or non-text context handling (images, scanned docs) &mdash; everything is text/code only.</li>
+<li><span class="mono">go_to_definition</span> is only as accurate as the language server's own resolution on Flask's codebase; it inherits any gaps in VS Code's Python/Jedi support rather than fixing them.</li>
+<li>The scout/editor subagent split is a fixed 2-stage pipeline, not a decision the agent makes dynamically itself &mdash; a month more would make this an agent-driven choice via TrueForge's dynamic subagent support, rather than hardcoded in our extension.</li>
+<li>No automated test suite for the MCP server tools themselves (<span class="mono">repo_map</span>, <span class="mono">search_code</span>, etc.) &mdash; they were verified through live, repeated manual runs against the real Flask fixture, not unit tests. This is the most honest gap: correctness rests on rehearsal, not CI.</li>
+<li>Context retrieval's keyword scoring (IDF &times; BM25-style) is tuned by inspection on one repo (Flask); it has not been validated against a second, structurally different codebase, so its token-budget behaviour on e.g. a monorepo or a non-Python project is unverified.</li>
+</ul>
+
+</body>
+</html>
