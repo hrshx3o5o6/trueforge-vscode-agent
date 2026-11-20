@@ -15,6 +15,18 @@ Last updated 2026-11-20 (branch `fix/audit-findings`).
       ("deferred-tools not found") → we preload; localhost connectors need
       `OUTBOUND_URL_ALLOWED_HOSTS` at both registration and connect time.
 
+- [x] **Live against TrueForge (openai/gpt-5-4-mini)** with the real
+      `TurnController`: native `tool.approval_required` → review →
+      `user.tool_approval` allow → TrueForge resumes and calls the MCP tool;
+      deny → tool never executes; cancel while paused → turn state
+      `cancelled` on the server, nothing written. (The stream stays open
+      while paused; the resubscribe path was not needed.)
+- [x] Extension Development Host activates, auto-registers the connector
+      on :4790 with its bearer token, and TrueForge lists all six tools.
+- [x] Flask 3.1.3 test env: `pip install -e . pytest==8.4.2 asgiref greenlet
+      python-dotenv` (latest pytest breaks Flask 3.1.3's test imports);
+      baseline `tests/test_cli.py` 58 passed.
+
 ## Fixed on this branch (see git log for detail)
 - [x] Agent spec never attached the MCP server → agent had no tools.
 - [x] Connector auto-registration with bearer token; SSRF-guard hint.
@@ -35,8 +47,6 @@ Last updated 2026-11-20 (branch `fix/audit-findings`).
 - [ ] Task C: invalid primary → retries → fallback; and no-fallback → clear error.
 - [ ] Cancel mid-Task-B: `git status` clean afterwards.
 - [ ] Undo button and Ctrl+Z on an applied change.
-- [ ] Whether TrueForge keeps the stream open while paused on approval or
-      closes it (the runner handles both; confirm which in the session log).
 
 ## Not started
 - [ ] Demo video (≤ 4 min, tasks A → B → C, show TrueForge session in B)

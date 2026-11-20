@@ -38,7 +38,8 @@ repo). Add a second model for automatic fallback. List the exact names with
 **3. Get the pinned task repository.**
 ```bash
 git clone https://github.com/pallets/flask.git && cd flask && git checkout 3.1.3
-python3 -m venv .venv && . .venv/bin/activate && pip install -e . pytest
+python3 -m venv .venv && . .venv/bin/activate
+pip install -e . pytest==8.4.2 asgiref greenlet python-dotenv   # newer pytest breaks Flask 3.1.3's tests
 ```
 
 **4. Build and launch the extension.**
