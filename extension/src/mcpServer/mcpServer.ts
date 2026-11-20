@@ -50,6 +50,7 @@ function createMcpServer(notify: (name: string, args: unknown) => void): McpServ
   server.registerTool(
     "repo_map",
     {
+      annotations: { readOnlyHint: true },
       description:
         `Directory tree + top-level symbols for the open workspace, capped at ~${REPO_MAP_TOKEN_BUDGET} tokens. ` +
         `Call this first in any multi-file task — it's cheap and cached. Do not call it more than once per turn.`,
@@ -66,6 +67,7 @@ function createMcpServer(notify: (name: string, args: unknown) => void): McpServ
   server.registerTool(
     "search_code",
     {
+      annotations: { readOnlyHint: true },
       description:
         `Ripgrep-backed search across the workspace. Returns up to ${SEARCH_MAX_RESULTS} ranked snippets ` +
         `(file, line, ~300-char context). If more matches exist, narrow your query instead of assuming you saw everything.`,
@@ -88,6 +90,7 @@ function createMcpServer(notify: (name: string, args: unknown) => void): McpServ
   server.registerTool(
     "read_file",
     {
+      annotations: { readOnlyHint: true },
       description:
         "Read a file from the workspace. Without a line range on a file longer than 40 lines, returns an " +
         "outline (symbol names + line numbers) instead of the full text — call again with a range to see a body.",
@@ -108,6 +111,7 @@ function createMcpServer(notify: (name: string, args: unknown) => void): McpServ
   server.registerTool(
     "propose_edit",
     {
+      annotations: { readOnlyHint: false, destructiveHint: false },
       description:
         "Propose writing new content to a file. NEVER writes directly — pauses here for human review in the " +
         "editor (per-hunk accept/reject) before returning. Call once per file for a multi-file change.",
@@ -157,6 +161,7 @@ function createMcpServer(notify: (name: string, args: unknown) => void): McpServ
   server.registerTool(
     "run_terminal_command",
     {
+      annotations: { readOnlyHint: false, destructiveHint: true },
       description: "Run a shell command in the workspace root. Pauses for human approval before running; 30s timeout.",
       inputSchema: { command: z.string() },
     },
@@ -175,6 +180,7 @@ function createMcpServer(notify: (name: string, args: unknown) => void): McpServ
   server.registerTool(
     "go_to_definition",
     {
+      annotations: { readOnlyHint: true },
       description:
         "Find a symbol's real definition using the editor's own language intelligence (more precise than search_code for 'where is X defined').",
       inputSchema: { symbol: z.string() },
@@ -190,12 +196,22 @@ function createMcpServer(notify: (name: string, args: unknown) => void): McpServ
   return server;
 }
 
-export async function startMcpServer(port: number): Promise<McpServerHandle> {
+export async function startMcpServer(port: number, authToken: string): Promise<McpServerHandle> {
   const listeners: Array<(name: string, args: unknown) => void> = [];
   const notify = (name: string, args: unknown) => listeners.forEach((l) => l(name, args));
 
   const app = express();
-  app.use(express.json());
+  app.use(express.json({ limit: "20mb" }));
+  // Only TrueForge (which we hand this token to on every activation, see
+  // trueforgeSetup.ts) may call these tools — the server can propose
+  // edits and run commands, so it must not be open to any local process.
+  app.use("/mcp", (req, res, next) => {
+    if (req.headers.authorization !== `Bearer ${authToken}`) {
+      res.status(401).json({ error: "missing or invalid bearer token" });
+      return;
+    }
+    next();
+  });
 
   // One MCP server instance per session id, per the SDK's streamable-HTTP
   // session model; a single-user local extension only ever has one real

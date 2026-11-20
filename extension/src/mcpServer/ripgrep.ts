@@ -14,10 +14,12 @@ function candidatePaths(): string[] {
   const exe = process.platform === "win32" ? "rg.exe" : "rg";
   const out: string[] = [];
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const vscode = require("vscode") as typeof import("vscode");
     const root = vscode.env.appRoot;
-    for (const modules of ["node_modules", "node_modules.asar.unpacked"]) {
+    const platformDir = `${process.platform === "win32" ? "win32" : process.platform}-${process.arch}`;
+    for (const modules of ["node_modules.asar.unpacked", "node_modules"]) {
+      // Newer VS Code builds ship a multi-arch package with per-platform dirs.
+      out.push(path.join(root, modules, "@vscode/ripgrep-universal", "bin", platformDir, exe));
       for (const pkg of ["@vscode/ripgrep", "vscode-ripgrep"]) {
         out.push(path.join(root, modules, pkg, "bin", exe));
       }

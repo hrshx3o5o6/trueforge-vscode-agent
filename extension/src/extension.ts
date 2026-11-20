@@ -1,8 +1,10 @@
 import * as vscode from "vscode";
+import { randomBytes } from "node:crypto";
 import { startMcpServer, type McpServerHandle } from "./mcpServer/mcpServer.js";
 import { invalidateRepoMapCache } from "./mcpServer/tools/repoMap.js";
 import { resolveEdit, resolveCommand, rejectAllPending } from "./mcpServer/approvalRegistry.js";
-import { createClient, type TrueForgeConfig } from "./trueforgeClient.js";
+import { createClient, loadAgentDefinition, type TrueForgeConfig } from "./trueforgeClient.js";
+import { ensureConnector } from "./trueforgeSetup.js";
 import { runTurnWithFallback } from "./resilience.js";
 import { AgentPanel } from "./webview/agentPanel.js";
 import type { TrueForge } from "@truefoundry/trueforge-sdk";
@@ -35,6 +37,9 @@ function loadConfig(): TrueForgeConfig {
       ? { name: settings.get<string>("fallbackModel")! }
       : undefined,
     mcpServerUrl: "", // filled in once the local server has a port
+    contextTokenBudget: settings.get<number>("contextTokenBudget", 6000),
+    maxRetries: settings.get<number>("maxRetries", 2),
+    stallTimeoutSeconds: settings.get<number>("stallTimeoutSeconds", 90),
   };
 }
 
@@ -42,15 +47,27 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   config = loadConfig();
   client = createClient(config);
 
+  const agentDef = loadAgentDefinition(context.extensionPath);
   const port = vscode.workspace.getConfiguration("trueforgeAgent").get<number>("mcpServerPort", 4790);
-  mcpServerHandle = await startMcpServer(port);
+  const mcpAuthToken = randomBytes(24).toString("hex");
+  mcpServerHandle = await startMcpServer(port, mcpAuthToken);
   config.mcpServerUrl = `http://127.0.0.1:${mcpServerHandle.port}/mcp`;
   context.subscriptions.push({ dispose: () => void mcpServerHandle?.close() });
   context.subscriptions.push({ dispose: () => rejectAllPending() });
 
-  vscode.window.setStatusBarMessage(
-    `TrueForge Agent: MCP tool server on ${config.mcpServerUrl} — register this URL in TrueForge Settings -> Connectors (no auth)`,
-    10_000,
+  // Register this window's MCP server with TrueForge (no manual
+  // Settings -> Connectors step). Non-blocking: a TrueForge that isn't up
+  // yet must not stop the extension from activating.
+  void ensureConnector({
+    baseUrl: config.baseUrl,
+    token: config.token,
+    name: agentDef.mcpServer.name,
+    description: agentDef.mcpServer.description,
+    mcpUrl: config.mcpServerUrl,
+    mcpAuthToken,
+  }).then(
+    () => vscode.window.setStatusBarMessage(`TrueForge Agent: tools connected (${config!.mcpServerUrl})`, 8_000),
+    (err: Error) => void vscode.window.showErrorMessage(`TrueForge Agent: ${err.message}`),
   );
 
   // Invalidate the cached repo_map whenever a file is saved — never

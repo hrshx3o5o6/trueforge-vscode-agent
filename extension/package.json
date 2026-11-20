@@ -79,7 +79,7 @@
         "trueforgeAgent.primaryModel": {
           "type": "string",
           "default": "",
-          "description": "Model name exactly as configured in TrueForge Settings -> Models, e.g. 'anthropic/claude-sonnet-4-6'."
+          "description": "Model name exactly as listed by TrueForge (Settings -> Models or GET /api/v1/models), e.g. 'openai/gpt-5-4-mini'."
         },
         "trueforgeAgent.fallbackModel": {
           "type": "string",
@@ -89,7 +89,26 @@
         "trueforgeAgent.mcpServerPort": {
           "type": "number",
           "default": 4790,
-          "description": "Local port for this extension's own MCP tool server. Register http://127.0.0.1:<port>/mcp in TrueForge Settings -> Connectors (no auth)."
+          "description": "Preferred local port for this extension's MCP tool server (falls back to a free port if taken). The extension registers it with TrueForge automatically."
+        },
+        "trueforgeAgent.contextTokenBudget": {
+          "type": "number",
+          "default": 6000,
+          "minimum": 500,
+          "description": "Token budget for context the editor assembles before a turn (@file / @symbol mentions + automatic retrieval)."
+        },
+        "trueforgeAgent.maxRetries": {
+          "type": "number",
+          "default": 2,
+          "minimum": 0,
+          "maximum": 5,
+          "description": "Retries (with exponential backoff) against the primary model before falling back to the fallback model."
+        },
+        "trueforgeAgent.stallTimeoutSeconds": {
+          "type": "number",
+          "default": 90,
+          "minimum": 15,
+          "description": "If TrueForge sends no event for this long (while not waiting on your review), the attempt is treated as failed and retried/fallen back."
         }
       }
     }

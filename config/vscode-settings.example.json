@@ -1,0 +1,10 @@
+{
+  "//": "Example model configuration. Copy into the workspace's .vscode/settings.json (or your user settings). Model names must match what TrueForge lists under Settings -> Models (GET http://localhost:8790/api/v1/models). No API keys live here: keys are configured inside TrueForge only.",
+  "trueforgeAgent.baseUrl": "http://localhost:8790",
+  "trueforgeAgent.primaryModel": "openai/gpt-5-4-mini",
+  "trueforgeAgent.fallbackModel": "ollama/qwen25-7b",
+  "trueforgeAgent.maxRetries": 2,
+  "trueforgeAgent.stallTimeoutSeconds": 90,
+  "trueforgeAgent.contextTokenBudget": 6000,
+  "trueforgeAgent.mcpServerPort": 4790
+}
