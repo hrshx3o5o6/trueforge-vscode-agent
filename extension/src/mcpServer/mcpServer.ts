@@ -21,12 +21,16 @@ import type * as http from "node:http";
 import { buildRepoMap, REPO_MAP_TOKEN_BUDGET } from "./tools/repoMap.js";
 import { searchCode, SEARCH_MAX_RESULTS } from "./tools/searchCode.js";
 import { readFile } from "./tools/readFile.js";
-import { proposeEdit, applyApprovedContent, reconstructContentFromAcceptedHunks } from "./tools/proposeEdit.js";
+import { proposeEdit, reconstructContentFromAcceptedHunks } from "./tools/proposeEdit.js";
+import { applyAndRecord } from "./editJournal.js";
 import { runTerminalCommand } from "./tools/runTerminalCommand.js";
 import { goToDefinition } from "./tools/goToDefinition.js";
 import {
   requestEditApproval,
   requestCommandApproval,
+  takeEditDecision,
+  takeCommandApproval,
+  writesAreBlocked,
   onEditProposed,
   onCommandProposed,
   type PendingEditRequest,
@@ -50,6 +54,7 @@ function createMcpServer(notify: (name: string, args: unknown) => void): McpServ
   server.registerTool(
     "repo_map",
     {
+      annotations: { readOnlyHint: true },
       description:
         `Directory tree + top-level symbols for the open workspace, capped at ~${REPO_MAP_TOKEN_BUDGET} tokens. ` +
         `Call this first in any multi-file task — it's cheap and cached. Do not call it more than once per turn.`,
@@ -66,6 +71,7 @@ function createMcpServer(notify: (name: string, args: unknown) => void): McpServ
   server.registerTool(
     "search_code",
     {
+      annotations: { readOnlyHint: true },
       description:
         `Ripgrep-backed search across the workspace. Returns up to ${SEARCH_MAX_RESULTS} ranked snippets ` +
         `(file, line, ~300-char context). If more matches exist, narrow your query instead of assuming you saw everything.`,
@@ -88,6 +94,7 @@ function createMcpServer(notify: (name: string, args: unknown) => void): McpServ
   server.registerTool(
     "read_file",
     {
+      annotations: { readOnlyHint: true },
       description:
         "Read a file from the workspace. Without a line range on a file longer than 40 lines, returns an " +
         "outline (symbol names + line numbers) instead of the full text — call again with a range to see a body.",
@@ -108,6 +115,7 @@ function createMcpServer(notify: (name: string, args: unknown) => void): McpServ
   server.registerTool(
     "propose_edit",
     {
+      annotations: { readOnlyHint: false, destructiveHint: false },
       description:
         "Propose writing new content to a file. NEVER writes directly — pauses here for human review in the " +
         "editor (per-hunk accept/reject) before returning. Call once per file for a multi-file change.",
@@ -118,36 +126,38 @@ function createMcpServer(notify: (name: string, args: unknown) => void): McpServ
     },
     async ({ path, new_content }) => {
       notify("propose_edit", { path });
+      if (writesAreBlocked()) {
+        return { content: [{ type: "text", text: `The run was cancelled; ${path} was not changed. Stop now.` }] };
+      }
       const result = await proposeEdit(path, new_content);
 
       if (result.hunks.length === 0) {
         return { content: [{ type: "text", text: `No changes: ${result.path} already matches the proposed content.` }] };
       }
 
-      // Blocks here — does not resolve until the webview relays the
-      // user's decision via approvalRegistry.resolveEdit(). See
-      // mcpServer.ts module doc + proposeEdit.ts's architecture note.
-      const decision = await requestEditApproval(result);
-
-      if (decision.acceptedHunkIndices.size === 0) {
+      // Normal path: TrueForge paused for approval before calling us and
+      // the user already picked hunks in the review card. Fallback path:
+      // no recorded decision, so block here on the in-process gate.
+      let accepted = takeEditDecision(result.path, new_content);
+      if (!accepted) {
+        accepted = (await requestEditApproval(result)).acceptedHunkIndices;
+      }
+      if (writesAreBlocked()) {
+        return { content: [{ type: "text", text: `The run was cancelled; ${result.path} was not changed. Stop now.` }] };
+      }
+      if (accepted.size === 0) {
         return { content: [{ type: "text", text: `User rejected all ${result.hunks.length} hunk(s) for ${result.path}. No changes were made.` }] };
       }
 
-      const finalContent = reconstructContentFromAcceptedHunks(
-        result.path,
-        result.oldContent,
-        result.hunks,
-        decision.acceptedHunkIndices,
-      );
-      await applyApprovedContent(result.path, finalContent);
+      const finalContent = reconstructContentFromAcceptedHunks(result.path, result.oldContent, result.hunks, accepted);
+      await applyAndRecord(result.path, result.oldContent, result.fileExisted, finalContent);
 
-      const acceptedCount = decision.acceptedHunkIndices.size;
-      const partial = acceptedCount < result.hunks.length;
+      const partial = accepted.size < result.hunks.length;
       return {
         content: [
           {
             type: "text",
-            text: `Applied ${acceptedCount} of ${result.hunks.length} hunk(s) to ${result.path}.${partial ? " Some hunks were rejected by the user — re-read the file if you need its exact current state." : ""}`,
+            text: `Applied ${accepted.size} of ${result.hunks.length} hunk(s) to ${result.path} (saved to disk).${partial ? " Some hunks were rejected by the user — re-read the file if you need its exact current state." : ""}`,
           },
         ],
       };
@@ -157,12 +167,16 @@ function createMcpServer(notify: (name: string, args: unknown) => void): McpServ
   server.registerTool(
     "run_terminal_command",
     {
+      annotations: { readOnlyHint: false, destructiveHint: true },
       description: "Run a shell command in the workspace root. Pauses for human approval before running; 30s timeout.",
       inputSchema: { command: z.string() },
     },
     async ({ command }) => {
       notify("run_terminal_command", { command });
-      const approved = await requestCommandApproval(command);
+      if (writesAreBlocked()) {
+        return { content: [{ type: "text", text: `The run was cancelled; did not run: ${command}` }] };
+      }
+      const approved = takeCommandApproval(command) || (await requestCommandApproval(command));
       if (!approved) {
         return { content: [{ type: "text", text: `User declined to run: ${command}` }] };
       }
@@ -175,6 +189,7 @@ function createMcpServer(notify: (name: string, args: unknown) => void): McpServ
   server.registerTool(
     "go_to_definition",
     {
+      annotations: { readOnlyHint: true },
       description:
         "Find a symbol's real definition using the editor's own language intelligence (more precise than search_code for 'where is X defined').",
       inputSchema: { symbol: z.string() },
@@ -190,12 +205,22 @@ function createMcpServer(notify: (name: string, args: unknown) => void): McpServ
   return server;
 }
 
-export async function startMcpServer(port: number): Promise<McpServerHandle> {
+export async function startMcpServer(port: number, authToken: string): Promise<McpServerHandle> {
   const listeners: Array<(name: string, args: unknown) => void> = [];
   const notify = (name: string, args: unknown) => listeners.forEach((l) => l(name, args));
 
   const app = express();
-  app.use(express.json());
+  app.use(express.json({ limit: "20mb" }));
+  // Only TrueForge (which we hand this token to on every activation, see
+  // trueforgeSetup.ts) may call these tools — the server can propose
+  // edits and run commands, so it must not be open to any local process.
+  app.use("/mcp", (req, res, next) => {
+    if (req.headers.authorization !== `Bearer ${authToken}`) {
+      res.status(401).json({ error: "missing or invalid bearer token" });
+      return;
+    }
+    next();
+  });
 
   // One MCP server instance per session id, per the SDK's streamable-HTTP
   // session model; a single-user local extension only ever has one real
@@ -257,12 +282,27 @@ export async function startMcpServer(port: number): Promise<McpServerHandle> {
     transports.delete(sessionId!);
   });
 
-  const server: http.Server = await new Promise((resolve) => {
-    const s = app.listen(port, "127.0.0.1", () => resolve(s));
-  });
+  // If the preferred port is taken (a second VS Code window, a stale
+  // process), fall back to an OS-assigned port instead of hanging
+  // activate() forever — the connector is re-registered with whatever
+  // port we actually got (see trueforgeSetup.ts).
+  const listenOn = (p: number): Promise<http.Server> =>
+    new Promise((resolve, reject) => {
+      const s = app.listen(p, "127.0.0.1");
+      s.once("listening", () => resolve(s));
+      s.once("error", reject);
+    });
+  let server: http.Server;
+  try {
+    server = await listenOn(port);
+  } catch {
+    server = await listenOn(0);
+  }
+  const address = server.address();
+  const actualPort = typeof address === "object" && address ? address.port : port;
 
   return {
-    port,
+    port: actualPort,
     close: () => new Promise((resolve) => server.close(() => resolve())),
     onToolCall: (listener) => listeners.push(listener),
     onEditProposed: (listener) => onEditProposed(listener),

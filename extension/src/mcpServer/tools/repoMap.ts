@@ -16,6 +16,8 @@ export const REPO_MAP_MAX_FILES = 500;
 interface CacheEntry {
   text: string;
   tokens: number;
+  truncated: boolean;
+  fileCount: number;
   builtAt: number;
 }
 
@@ -61,7 +63,7 @@ export async function buildRepoMap(options: { forceRefresh?: boolean } = {}): Pr
   fileCount: number;
 }> {
   if (cache && !options.forceRefresh) {
-    return { text: cache.text, tokens: cache.tokens, truncated: false, fileCount: -1 };
+    return { text: cache.text, tokens: cache.tokens, truncated: cache.truncated, fileCount: cache.fileCount };
   }
 
   const root = getWorkspaceRoot();
@@ -96,6 +98,6 @@ export async function buildRepoMap(options: { forceRefresh?: boolean } = {}): Pr
   const { text, truncated } = truncateToTokenBudget(body, REPO_MAP_TOKEN_BUDGET);
   const tokens = estimateTokens(text);
 
-  cache = { text, tokens, builtAt: Date.now() };
+  cache = { text, tokens, truncated, fileCount: files.length, builtAt: Date.now() };
   return { text, tokens, truncated, fileCount: files.length };
 }

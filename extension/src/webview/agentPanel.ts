@@ -74,6 +74,13 @@ export class AgentPanel {
   .hunk-header label { cursor: pointer; }
   .review-actions { margin-top: 6px; }
   .review-actions button { margin-right: 6px; }
+  .status-info { color: var(--vscode-descriptionForeground); }
+  .status-warn { color: var(--vscode-editorWarning-foreground); }
+  .status-error { color: var(--vscode-errorForeground); font-weight: 600; }
+  .applied { border-left: 3px solid var(--vscode-charts-green); padding: 2px 6px; margin: 4px 0; }
+  .applied button { margin-left: 8px; }
+  .context-card { border-left: 3px solid var(--vscode-charts-purple); padding: 2px 6px; margin: 6px 0; font-size: 12px; }
+  .context-card li { margin: 1px 0; }
   .cmd-text { font-family: var(--vscode-editor-font-family); background: var(--vscode-textCodeBlock-background); padding: 4px; display: block; margin: 6px 0; }
 </style>
 </head>
@@ -90,7 +97,7 @@ export class AgentPanel {
     const sendBtn = document.getElementById('send');
     const cancelBtn = document.getElementById('cancel');
 
-    function esc(s) { return String(s).replace(/</g, '&lt;'); }
+    function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 
     function append(html) {
       const div = document.createElement('div');
@@ -105,14 +112,22 @@ export class AgentPanel {
       if (!text) return;
       append('<div><b>You:</b> ' + esc(text) + '</div>');
       input.value = '';
-      sendBtn.disabled = true;
-      cancelBtn.disabled = false;
+      setRunning(true);
       vscode.postMessage({ type: 'send', text });
     });
 
     cancelBtn.addEventListener('click', () => {
+      cancelBtn.disabled = true;
       vscode.postMessage({ type: 'cancel' });
     });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { sendBtn.click(); }
+    });
+
+    function setRunning(running) {
+      sendBtn.disabled = running;
+      cancelBtn.disabled = !running;
+    }
 
     function renderHunk(hunk, index) {
       const lines = hunk.lines.map((l) => {
@@ -188,14 +203,32 @@ export class AgentPanel {
         renderEditReview(msg);
       } else if (msg.type === 'command_review') {
         renderCommandReview(msg);
-      } else if (msg.type === 'fallback') {
-        append('<div class="error">[primary model failed — retrying with fallback model]</div>');
+      } else if (msg.type === 'run_started') {
+        setRunning(true);
+      } else if (msg.type === 'status') {
+        append('<div class="status-' + esc(msg.level) + '">[' + esc(msg.level) + '] ' + esc(msg.message) + '</div>');
+      } else if (msg.type === 'context') {
+        const items = msg.items.map((it) =>
+          '<li><code>' + esc(it.label) + '</code> — ' + esc(it.reason) + ' (~' + it.tokens + ' tok)</li>').join('');
+        append('<div class="context-card"><b>Context selected</b> (' + msg.usedTokens + ' / ' + msg.budget +
+          ' token budget)<ul>' + items + '</ul>' + (msg.dropped ? '<i>' + msg.dropped + ' lower-ranked candidate(s) left out to stay in budget</i>' : '') + '</div>');
+      } else if (msg.type === 'applied') {
+        const div = append('<div class="applied">✔ applied &amp; saved <code>' + esc(msg.path) + '</code>' +
+          (msg.existed ? '' : ' (new file)') + '<button class="undo">Undo</button></div>');
+        div.querySelector('.undo').addEventListener('click', (ev) => {
+          ev.target.disabled = true;
+          vscode.postMessage({ type: 'undo', entryId: msg.entryId });
+        });
+      } else if (msg.type === 'undone') {
+        append('<div class="status-info">↶ ' + esc(msg.message) + '</div>');
       } else if (msg.type === 'error') {
-        append('<div class="error">[error] ' + esc(msg.message) + '</div>');
+        append('<div class="status-error">[error] ' + esc(msg.message) + '</div>');
       } else if (msg.type === 'done') {
-        append('<div><i>--- turn done' + (msg.usedFallback ? ' (via fallback model)' : '') + ' ---</i></div>');
-        sendBtn.disabled = false;
-        cancelBtn.disabled = true;
+        if (msg.error) { append('<div class="status-error">' + esc(msg.error) + '</div>'); }
+        const via = msg.model ? ' · model ' + esc(msg.model) + (msg.usedFallback ? ' (fallback)' : '') : '';
+        const sess = msg.sessionId ? ' · TrueForge session ' + esc(msg.sessionId) : '';
+        append('<div><i>--- run ' + esc(msg.status || 'done') + via + sess + ' ---</i></div>');
+        setRunning(false);
       }
     });
   </script>

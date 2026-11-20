@@ -4,8 +4,8 @@
  * returns a count and asks the agent to narrow the query, structurally,
  * not by hoping the model behaves.
  */
-import { spawn } from "node:child_process";
 import { getWorkspaceRoot, toRelative } from "../workspace.js";
+import { runRipgrep } from "../ripgrep.js";
 
 export const SEARCH_MAX_RESULTS = 20;
 export const SEARCH_SNIPPET_MAX_CHARS = 300;
@@ -20,22 +20,6 @@ export interface SearchResult {
   hits: SearchHit[];
   totalMatches: number;
   truncated: boolean;
-}
-
-function runRipgrep(args: string[], cwd: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const proc = spawn("rg", args, { cwd });
-    let stdout = "";
-    let stderr = "";
-    proc.stdout.on("data", (d) => (stdout += d.toString()));
-    proc.stderr.on("data", (d) => (stderr += d.toString()));
-    proc.on("error", reject);
-    proc.on("close", (code) => {
-      // rg exits 1 when there are simply no matches — not an error for us.
-      if (code === 0 || code === 1) {resolve(stdout);}
-      else {reject(new Error(stderr || `ripgrep exited with code ${code}`));}
-    });
-  });
 }
 
 export async function searchCode(query: string, pathGlob?: string): Promise<SearchResult> {

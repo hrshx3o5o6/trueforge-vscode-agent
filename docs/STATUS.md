@@ -1,104 +1,54 @@
-# Status — what's done, what's not, who owns what
+# Status — what's done, what's not
 
-Update this file as work happens. This is the fastest way for a new
-teammate to know what's real vs. planned.
+Last updated 2026-11-20 (branch `fix/audit-findings`).
 
-## Done (verified, not just written)
-- [x] TrueForge server running locally at `http://localhost:8790`
-      (verified 2026-11-18, standalone mode, SQLite, health check OK)
-- [x] Fork base copied in from `sst/opencode` @ `521ceac004e59fbbfca0929596107cd8430f2b26`
-- [x] Repo scaffolded with full planning docs
-- [x] **MCP tool server implemented** (`extension/src/mcpServer/`): all 6
-      tools coded — `repo_map`, `search_code`, `read_file`, `propose_edit`
-      (+ per-hunk reconstruction), `run_terminal_command`, `go_to_definition`
-- [x] **Phase 3 diff review + approval gate implemented**
-      (`approvalRegistry.ts`, webview per-hunk UI, extension.ts relay):
-      `propose_edit`/`run_terminal_command` tool calls now genuinely
-      block until a human acts in the webview — accept-all/apply-selected
-      (per hunk via checkboxes)/reject-all for edits, run-it/deny for
-      commands. **Architecture pivot from the original plan**: this is
-      our OWN in-process gate, not a TrueForge-native approval event —
-      the installed SDK's reference.md was checked directly and exposes
-      no such concept, so an MCP tool call just doesn't resolve until the
-      user acts. Documented in `proposeEdit.ts`'s header comment.
-- [x] **Extension wiring implemented** (`extension/src/extension.ts`):
-      starts the MCP server on activate, registers `openPanel` +
-      `inlineEdit` commands, configuration schema in `package.json`.
-      Fixed two real bugs caught during this pass: `onToolCall` listeners
-      were stacking (duplicate log lines) every time `wirePanel()` ran
-      more than once; `cancelled` was a per-call closure that would have
-      gone stale if a re-wire happened mid-turn. Both now module-level /
-      dispatched-by-reference correctly.
-- [x] **Resilience wrapper implemented** (`resilience.ts`): automatic
-      fallback to a second model on turn failure
-- [x] **Webview panel implemented** (`webview/agentPanel.ts`): plain
-      HTML/CSS/JS chat UI, streams deltas/tool-calls, cancel button, +
-      per-hunk diff review cards and command-approval cards (Phase 3)
-- [x] `npm install` succeeds, `npx tsc --noEmit` passes clean, `npx
-      eslint src` passes with 0 errors/0 warnings, `node esbuild.js`
-      produces a working `dist/extension.js` bundle (re-verified after
-      Phase 3, 2026-11-18)
+## Done and verified
+- [x] `npm install`, `tsc --noEmit`, `eslint src`, `node esbuild.js` all clean.
+- [x] Per-hunk partial apply (`reconstructContentFromAcceptedHunks`) tested
+      with mixed accept/reject sets on a 3-hunk file: correct output.
+- [x] Context assembly run against `pallets/flask` 3.1.3 with the Task B
+      wording: selects `src/flask/cli.py`, `tests/test_cli.py`,
+      `docs/cli.rst` within a 6k-token budget.
+- [x] Live TrueForge (local mode) behaviour confirmed by experiment:
+      unknown `mcpServers` name → 422; tool calls arrive only as
+      `model.message.delta` fragments; deferred tool discovery fails
+      ("deferred-tools not found") → we preload; localhost connectors need
+      `OUTBOUND_URL_ALLOWED_HOSTS` at both registration and connect time.
 
-## NOT yet verified (compiles ≠ works — be honest about this gap)
-- [ ] **Never run inside a real Extension Development Host.** All of the
-      above is confirmed to compile and bundle, but nobody has pressed F5
-      and actually clicked a button yet. This is the single most
-      important next step — do this before building anything else.
-- [ ] **Never run against a real TrueForge turn.** No model provider has
-      been configured in TrueForge yet (needs a real API key — do this
-      manually in the TrueForge UI at localhost:8790, never via chat/vault).
-      Until this happens, we don't know if the event shapes assumed in
-      `resilience.ts` (`model.message.delta`, `tool.call`, `turn.done`
-      `state.status` values) match what the SDK actually sends — these are
-      documented as explicit assumptions in the code comments and in
-      `docs/SETUP.md` "known gaps."
-- [ ] **MCP server never registered with TrueForge.** Settings ->
-      Connectors -> Add MCP Server -> `http://127.0.0.1:4790/mcp` (no
-      auth) is still a manual step nobody has done.
-- [ ] **Ctrl+Z / undo-cleanliness never actually verified on screen.**
-      `applyApprovedContent` uses `vscode.workspace.applyEdit`, which is
-      undo-stack-integrated by construction — but "should be undoable" is
-      not the same as having pressed Ctrl+Z after a real applied edit and
-      watched it revert cleanly. Do this in the first real run (Phase 3's
-      checklist item, `docs/PLAN.md` line 56).
-- [ ] **Cancellation is still best-effort only** — `extension.ts` stops
-      processing events locally on Cancel, but does not actually abort
-      the underlying TrueForge stream/turn server-side. Needs a real
-      cancel API call once confirmed in the SDK reference.
-- [ ] A rejected/partial edit's tool-result text tells the model what
-      happened in plain English, but was never actually tested against a
-      real model to see if it reliably adapts (e.g. re-reads the file
-      before trying again) — flag any weirdness here during the first run.
-- [ ] Task A/B/C rehearsal — can't start until the above works end-to-end
-- [ ] Demo video
-- [ ] Write-up PDF
+- [x] **Live against TrueForge (openai/gpt-5-4-mini)** with the real
+      `TurnController`: native `tool.approval_required` → review →
+      `user.tool_approval` allow → TrueForge resumes and calls the MCP tool;
+      deny → tool never executes; cancel while paused → turn state
+      `cancelled` on the server, nothing written. (The stream stays open
+      while paused; the resubscribe path was not needed.)
+- [x] Extension Development Host activates, auto-registers the connector
+      on :4790 with its bearer token, and TrueForge lists all six tools.
+- [x] Flask 3.1.3 test env: `pip install -e . pytest==8.4.2 asgiref greenlet
+      python-dotenv` (latest pytest breaks Flask 3.1.3's test imports);
+      baseline `tests/test_cli.py` 58 passed.
 
-## Immediate next step for whoever picks this up
-1. Configure a model provider in TrueForge (localhost:8790 UI, needs a
-   real API key — do this yourself, don't paste a key into chat).
-2. `cd extension && npm run watch:esbuild` in one terminal.
-3. Open this repo's `extension/` folder in VS Code, press F5.
-4. In the new Extension Development Host window, open the `pallets/flask`
-   clone as the workspace, run "TrueForge Agent: Open Panel", and send a
-   real message that should trigger `propose_edit` (e.g. "add a one-line
-   comment to the top of README.md"). **This first real run will almost
-   certainly surface bugs** in the untested assumptions above — expect to
-   spend real time here before moving to Phase 4/5/6.
-5. Specifically watch: does the diff review card actually render with
-   real hunks? Does clicking "Apply selected" actually change the file on
-   disk? Does Ctrl+Z undo it cleanly? Does the tool's return text make the
-   model behave sensibly afterward?
+## Fixed on this branch (see git log for detail)
+- [x] Agent spec never attached the MCP server → agent had no tools.
+- [x] Connector auto-registration with bearer token; SSRF-guard hint.
+- [x] Diff review driven by TrueForge-native tool approval.
+- [x] Real cancel (`sessions.cancel` + stream abort) and whole-run rollback.
+- [x] Applied edits saved to disk; per-change Undo button.
+- [x] Stall watchdog, retry with backoff, automatic fallback.
+- [x] Inline edit reports errors (used to fail silently), is cancellable,
+      opens the diff in VS Code's diff editor.
+- [x] `@file` / `@symbol` mentions + budgeted auto-retrieval with a
+      visible "Context selected" card.
+- [x] Bundled ripgrep; MCP port-conflict fallback; HTML escaping.
 
-## Ownership
-_(fill in once the team divides work — suggested split below, not fixed)_
-- MCP tool server + Phase 3 approval gate (`extension/src/mcpServer/`): built, needs runtime testing — ?
-- Extension webview + diff UI: built, needs runtime testing — ?
-- TrueForge agent/model config + resilience (Task C): code written, untested against a real server — ?
-- Write-up + video: not started — ?
+## Still to verify by hand (needs TrueForge restarted with the allow-list)
+- [ ] Full Task A in the Extension Development Host: diff editor opens,
+      per-hunk accept, file saved, `FLASK_DEBUG=off python -c ...` prints False.
+- [ ] Task B end to end: 3+ files, pytest passes, `flask config` masks.
+- [ ] Task C: invalid primary → retries → fallback; and no-fallback → clear error.
+- [ ] Cancel mid-Task-B: `git status` clean afterwards.
+- [ ] Undo button and Ctrl+Z on an applied change.
 
-## Deadline
-**Round 1 submission: 20 November 2026, 23:59 IST.** Today is 18 November.
-Given the timeline, prioritize ruthlessly per `docs/PLAN.md`'s phase order
-— Phase 0-4 are non-negotiable; Phase 6 (subagent split) is valuable but
-cuttable if time runs out; a working, rehearsed Phase 7 demo matters more
-than a perfect Phase 6.
+## Not started
+- [ ] Demo video (≤ 4 min, tasks A → B → C, show TrueForge session in B)
+- [ ] Write-up PDF (8 headings — see `docs/WRITEUP_OUTLINE.md`)
+- [ ] Make the GitHub repo public before 20 Nov 23:59 IST

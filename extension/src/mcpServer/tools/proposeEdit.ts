@@ -62,30 +62,6 @@ export async function proposeEdit(relativePath: string, newContent: string): Pro
   return { path: toRelative(absPath), unifiedDiff, hunks, fileExisted, oldContent, newContent };
 }
 
-/** Called by the extension's approval handler once hunks are accepted —
- * this is the ONLY place that actually touches disk, and only via VS
- * Code's own undoable edit API, never a raw fs.writeFile. */
-export async function applyApprovedContent(relativePath: string, newContent: string): Promise<void> {
-  const vscode = await import("vscode");
-  const absPath = resolveInWorkspace(relativePath);
-  const uri = vscode.Uri.file(absPath);
-  let doc: import("vscode").TextDocument;
-  try {
-    doc = await vscode.workspace.openTextDocument(uri);
-  } catch {
-    // File doesn't exist yet — create it via a WorkspaceEdit too, so it's
-    // still undoable in one step.
-    const edit = new vscode.WorkspaceEdit();
-    edit.createFile(uri, { overwrite: false, contents: Buffer.from(newContent, "utf8") });
-    await vscode.workspace.applyEdit(edit);
-    return;
-  }
-  const fullRange = new vscode.Range(doc.positionAt(0), doc.positionAt(doc.getText().length));
-  const edit = new vscode.WorkspaceEdit();
-  edit.replace(uri, fullRange, newContent);
-  await vscode.workspace.applyEdit(edit);
-}
-
 /** True per-hunk acceptance: rebuilds file content using only the hunks
  * the user accepted, by re-serializing a unified diff containing just
  * those hunks and running it through `diff`'s own patch applier — so the
