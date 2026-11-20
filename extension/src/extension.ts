@@ -20,6 +20,7 @@ import { ensureConnector } from "./trueforgeSetup.js";
 import { TurnController, type ApprovalAnswer, type ApprovalRequest } from "./turnRunner.js";
 import { AgentPanel } from "./webview/agentPanel.js";
 import { ProposedContentProvider, PROPOSED_SCHEME } from "./diffPreview.js";
+import { assembleContext, type ContextItem } from "./contextAssembler.js";
 
 let mcpServerHandle: McpServerHandle | undefined;
 let client: TrueForge | undefined;
@@ -229,8 +230,29 @@ async function runRequest(opts: RunOptions): Promise<{ status: string; error?: s
   }
 }
 
+/** Assembles the <context> block and shows the selection in the panel. */
+async function withContext(request: string, opts: { extra?: ContextItem[]; autoRetrieve?: boolean }): Promise<string> {
+  try {
+    const ctx = await assembleContext(request, config?.contextTokenBudget ?? 6000, opts);
+    if (ctx.items.length) {
+      panel().post({
+        type: "context",
+        items: ctx.items.map(({ label, reason, tokens }) => ({ label, reason, tokens })),
+        usedTokens: ctx.usedTokens,
+        budget: ctx.budget,
+        dropped: ctx.dropped,
+      });
+    }
+    return ctx.block;
+  } catch (err) {
+    panel().post({ type: "status", level: "warn", message: `Context assembly skipped: ${(err as Error).message}` });
+    return "";
+  }
+}
+
 async function runChat(text: string): Promise<void> {
-  const result = await runRequest({ prompt: text, sessionId: chatSessionId });
+  const block = activeRun ? "" : await withContext(text, { autoRetrieve: true });
+  const result = await runRequest({ prompt: block + text, sessionId: chatSessionId });
   if (result.sessionId) {chatSessionId = result.sessionId;}
 }
 
@@ -258,12 +280,16 @@ async function handleInlineEdit(): Promise<void> {
     `Read ${relativePath} with read_file (a line range is enough) only if you need surrounding code, ` +
     `then call propose_edit once with the full new content of ${relativePath}. Do not edit other files.`;
 
+  // Inline edit: only explicit @mentions in the instruction, no automatic
+  // retrieval — the selection is the context, and the edit is single-file.
+  const block = await withContext(instruction, { autoRetrieve: false });
+
   await vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: "TrueForge inline edit", cancellable: true },
     async (progress, token) => {
       token.onCancellationRequested(() => void cancelActiveRun());
       progress.report({ message: "waiting for the model… (diff opens for review)" });
-      const result = await runRequest({ prompt });
+      const result = await runRequest({ prompt: block + prompt });
       if (result.status === "failed") {
         void vscode.window.showErrorMessage(`TrueForge inline edit failed: ${result.error ?? "unknown error"}`);
       } else if (result.status === "cancelled") {
