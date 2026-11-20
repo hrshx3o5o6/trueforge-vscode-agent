@@ -1,44 +1,100 @@
 # TrueForge VS Code Agent — Techfest 2026-27 Forge-a-thon
 
-A VS Code coding-agent extension whose agent loop runs entirely on
-[TrueForge](https://github.com/truefoundry/trueforge) (TrueFoundry's
-open-source agent harness) — built for the **2nd Techfest Forge-a-thon**
-(Round 1 deadline: **20 November 2026, 23:59 IST**).
+A VS Code coding agent whose agent loop runs entirely on
+[TrueForge](https://github.com/truefoundry/trueforge). The extension is a
+TrueForge client: it creates sessions and streams turns through
+`@truefoundry/trueforge-sdk`, and exposes the editor (repo map, search,
+file reading, go-to-definition, reviewed edits, approved commands) to the
+agent as **MCP tools**. The agent, not the extension, decides what to read
+and change. The extension never calls a model provider directly.
 
 **Team:** dihhbug (see `docs/TEAM.md`)
 
-## What this is
-Editor capabilities (read/search file, propose an edit, run a command) are
-exposed to the agent as **MCP tools**, not handled secretly inside the
-extension. TrueForge runs the actual tool loop — model calls, streaming,
-context management, deciding which tools to call and when. Human approval
-for `propose_edit`/`run_terminal_command` is our own in-process gate (see
-`docs/DECISIONS.md`) since the installed TrueForge SDK has no native
-approval event; our extension renders it as a per-hunk diff review card.
+## Features
+| Capability | How |
+|---|---|
+| Inline edit | Select code → `Cmd/Ctrl+K` → type an instruction. The proposal opens in VS Code's diff editor and as per-hunk cards in the panel; accept/reject each hunk. |
+| Agent mode | `Cmd/Ctrl+L` opens the panel. One request drives a TrueForge tool loop (`repo_map`, `search_code`, `read_file`, `go_to_definition`, `propose_edit`, `run_terminal_command`) until done. |
+| Context assembly | `@path/to/file` and `@symbol` mentions, plus automatic retrieval ranked by IDF/BM25 with source/test/doc slots, under a token budget. The panel lists every file chosen and why. See `docs/CONTEXT_STRATEGY.md`. |
+| Diff review | `propose_edit`/`run_terminal_command` require **TrueForge-native tool approval**. The extension answers `tool.approval_required` from the per-hunk review. Nothing is written before approval; applied changes are saved and each has an **Undo** button (Ctrl+Z also works). |
+| Streaming & cancel | Tokens stream from `model.message.delta`. Cancel (button or `Cmd/Ctrl+Shift+Backspace`) aborts the stream, calls `sessions.cancel`, and rolls back every edit applied in that run. |
+| Resilience | Stall watchdog → retry with exponential backoff → automatic fallback to a second model. A failed run is rolled back and reported clearly. |
 
-## Fork declaration (required by the rules)
+## Setup from a clean clone
+Prerequisites: Node 20+, VS Code ≥ 1.94, git, Python 3.9+ (for the Flask tasks).
+
+**1. Start TrueForge in local mode** (leave it running). The allow-list is
+required: TrueForge's SSRF guard otherwise refuses to connect to the
+extension's MCP server on `127.0.0.1`.
+```bash
+OUTBOUND_URL_ALLOWED_HOSTS='["localhost","127.0.0.1"]' npx @truefoundry/trueforge@latest
+```
+
+**2. Configure models in TrueForge.** Open http://localhost:8790 →
+Settings → Models, add a provider and its key there (keys never go in this
+repo). Add a second model for automatic fallback. List the exact names with
+`curl -s localhost:8790/api/v1/models`.
+
+**3. Get the pinned task repository.**
+```bash
+git clone https://github.com/pallets/flask.git && cd flask && git checkout 3.1.3
+python3 -m venv .venv && . .venv/bin/activate && pip install -e . pytest
+```
+
+**4. Build and launch the extension.**
+```bash
+cd extension && npm install && npm run compile
+code .          # then press F5 → "Extension Development Host"
+```
+In the new window, open the `flask` folder.
+
+**5. Point the extension at your models.** Copy
+[`config/vscode-settings.example.json`](config/vscode-settings.example.json)
+into `flask/.vscode/settings.json` and set `trueforgeAgent.primaryModel` /
+`trueforgeAgent.fallbackModel` to names from step 2.
+
+**6. Done.** The agent definition is loaded from
+[`extension/agents/coding-agent.json`](extension/agents/coding-agent.json),
+and the extension registers its own MCP connector with TrueForge on startup,
+with a fresh bearer token each time. The status bar says
+*"TrueForge Agent: tools connected"*. If it can't, an error tells you the
+exact fix.
+
+## Agent definition and model configuration
+- Agent definition (committed): `extension/agents/coding-agent.json`:
+  instructions, MCP server attachment, approval-gated tools, compaction,
+  large-tool-response offload, dynamic subagents.
+- Example model configuration: `config/vscode-settings.example.json`.
+  Any model TrueForge can serve works. Nothing is provider-specific.
+
+## Fork declaration
 - **Upstream:** [`sst/opencode`](https://github.com/sst/opencode), subdirectory `sdks/vscode/`
 - **Commit:** `521ceac004e59fbbfca0929596107cd8430f2b26` (2026-11-18)
-- **Upstream licence:** MIT — preserved at `LICENSE-UPSTREAM-OPENCODE`, this repo's own new code is also MIT (`LICENSE`)
-- **Why this base, not a fuller community fork:** the official `sst/opencode` VS Code extension is a thin terminal launcher (no webview, no diff UI) — we build the webview/diff/approval UI ourselves on top of its extension-activation scaffolding. A fuller community fork (`opencode-harness`) had no clear LICENSE file, which was a risk not worth taking under deadline pressure. See `docs/DECISIONS.md`.
+- **Licence:** MIT, preserved at `LICENSE-UPSTREAM-OPENCODE`. Our own code is MIT (`LICENSE`).
+- **What we kept:** the extension activation scaffolding, build config
+  (esbuild/eslint/tsconfig) and packaging scripts.
+- **What we changed and why:** upstream is a terminal launcher with no agent
+  loop of its own, so there was no loop to replace. Everything else is new:
+  the TrueForge client and turn runner, the MCP tool server, the
+  approval-driven diff review, context assembly, the edit journal
+  (undo/rollback), and the webview. See `docs/DECISIONS.md` and the git
+  history from the first commit.
 
 ## Repository layout
 ```
-extension/                 the VS Code extension (forked skeleton + our additions)
-extension/src/mcpServer/   our MCP tool server — runs INSIDE the extension host
-                            (needs vscode.* APIs for symbol/definition lookups,
-                            which only exist in that process; see docs/DECISIONS.md)
-docs/                      the full technical plan — START HERE if you're new to this repo
+extension/agents/            TrueForge agent definition (JSON)
+extension/src/extension.ts   activation, commands, run orchestration
+extension/src/turnRunner.ts  streaming, approvals, cancel, retry/backoff, fallback
+extension/src/contextAssembler.ts   @-mentions + budgeted auto-retrieval
+extension/src/trueforgeSetup.ts     auto-registers the MCP connector
+extension/src/diffPreview.ts        proposed change in VS Code's diff editor
+extension/src/mcpServer/     MCP tool server (runs inside the extension host)
+extension/src/webview/       agent panel (plain HTML/CSS/JS)
+config/                      example model configuration
+docs/                        architecture, context strategy, decisions, tasks
 ```
 
-## Start here if you're picking this up
-1. Read `docs/PLAN.md` — the full build plan, mapped to the competition's scoring criteria
-2. Read `docs/ARCHITECTURE.md` — how the pieces actually connect
-3. Read `docs/CONTEXT_STRATEGY.md` — the context-assembly design (our biggest differentiator)
-4. Read `docs/SETUP.md` — how to get TrueForge + the extension running locally
-5. Check `docs/STATUS.md` for what's done vs. not yet started
-
 ## Competition
-- Pinned task repo: `pallets/flask` @ tag `3.1.3`
-- 3 fixed tasks (A, B, C) — see `docs/TASKS.md` for exact wording and verification steps
-- Full scoring breakdown: `docs/SCORING_MAP.md`
+- Pinned task repo: `pallets/flask` @ tag `3.1.3` (commit `22d92470`)
+- Fixed tasks A/B/C and verification steps: `docs/TASKS.md`
+- Scoring map: `docs/SCORING_MAP.md`

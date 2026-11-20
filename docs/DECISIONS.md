@@ -64,16 +64,46 @@ everything else. This also simplifies the "run from a clean clone" story —
 one `F5` launches the UI and the tool server together, no second process to
 manage or document separately.
 
-## Human approval is our OWN in-process gate, not a TrueForge-native event
-The original Phase 3 plan assumed TrueForge exposes some "tool needs
-approval" event we'd listen for and resolve. Checked the installed SDK's
-own `reference.md` directly (not assumed) before building anything —
-no such concept exists in this version. Rather than block on an
-unconfirmed API or guess at one, `propose_edit`/`run_terminal_command`'s
-tool handlers (in `mcpServer.ts`) just don't resolve their own async
-function until the user acts in the webview — a normal, supported way to
-run a long-lived MCP tool call. `approvalRegistry.ts` holds the pending
-promise resolvers; `extension.ts` relays the webview's decision back into
-it. This needed zero unconfirmed TrueForge API surface, gives exact
-per-hunk granularity (not just per-file), and is simpler than the
-alternative we'd planned around.
+## Human approval is TrueForge-native; our gate is only a fallback (corrected 2026-11-20)
+The earlier entry here claimed the SDK has no approval concept. That was
+wrong: `McpServer.requireApprovalForTools`, the `tool.approval_required`
+event and the `user.tool_approval` input all exist. Now
+`agents/coding-agent.json` marks `propose_edit` and `run_terminal_command`
+as approval-required. When TrueForge pauses, `turnRunner.ts` rebuilds the
+call's arguments from the streamed deltas, the extension renders the
+per-hunk review (and VS Code's diff editor), records the hunk selection
+(`approvalRegistry.recordEditDecision`), and posts allow/deny back to the
+turn. When TrueForge then calls the tool, the MCP handler applies exactly
+the recorded hunks. If no decision was recorded (approval not configured
+on the server), the handler falls back to the old in-process gate, so a
+write still never happens without a human decision.
+
+## The agent spec must attach the MCP server (fixed 2026-11-20)
+Registering a connector in TrueForge does not give a session tools.
+`spec.mcpServers: [{ name }]` is required, and an unknown name fails
+session creation with HTTP 422. The extension now also registers/updates
+the connector itself (`trueforgeSetup.ts`) with a per-activation bearer
+token, because the MCP server can edit files and run commands.
+
+## Tools are preloaded, not deferred
+TrueForge's deferred tool discovery (`preload: false`, the default) failed
+in local mode during testing: the model's `list_tools` call returned
+"MCP server 'deferred-tools' not found". Six small schemas are cheap, so
+we preload them. Context-engineering features we do use: compaction,
+large-tool-response offload, dynamic subagents (all in the agent
+definition), plus our own pre-turn context assembly.
+
+## Edits are saved, journaled and roll back as a unit
+`WorkspaceEdit` alone only changes the in-memory document, so `pytest` in
+a terminal saw the old file. Every applied change is now saved and
+recorded in `editJournal.ts`, which powers the per-change Undo button and
+whole-run rollback on cancel, failure or retry. A cancelled multi-file
+run therefore never leaves half-applied edits behind.
+
+## Resilience: watchdog → retry with backoff → fallback
+`turnRunner.ts` treats a thrown SDK error, `turn.done` with
+`state.status: "error"`, or no event for `stallTimeoutSeconds` (while not
+waiting on the user) as a failed attempt. It retries the primary model
+`maxRetries` times (1s, 2s, 4s…) in the same session, then falls back
+automatically to `fallbackModel` in a new session. A session's model is
+fixed at creation, so chat history is lost only on that path.

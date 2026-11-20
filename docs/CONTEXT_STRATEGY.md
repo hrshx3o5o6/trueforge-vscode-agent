@@ -1,12 +1,47 @@
 # Context assembly strategy (our biggest differentiator — B1, 15 pts)
 
-**Core idea: don't pre-retrieve for the agent. Give it cheap, bounded tools
-and let its own tool-loop decide what to fetch.** This is literally what
+**Core idea: two layers.** (1) Before the turn, the editor makes a small,
+budgeted *opening bid* — `@file`/`@symbol` mentions plus automatic
+retrieval — and shows the user exactly what it picked and why. (2) The
+agent then explores with cheap, bounded tools and its own tool loop decides
+what else to fetch. This is literally what
 "agent mode... finding them is the agent's job" means in the brief, and it's
 also what the B1 top anchor requires: *"retrieval with a size budget,
 strategy stated, and visibly at work in Task B."*
 
-## The 4 tools and their hard budgets
+## Layer 1 — editor-assembled context (`extension/src/contextAssembler.ts`)
+Budget: `trueforgeAgent.contextTokenBudget`, default **6,000 tokens**
+(~4 chars/token estimate). Items are admitted greedily in priority order;
+anything that does not fit is dropped and counted in the panel.
+
+1. **`@file` mentions** — full file if it fits half the budget, else
+   outline (editor symbols, regex fallback) + head.
+2. **`@symbol` mentions** — definition body, located with
+   `vscode.executeWorkspaceSymbolProvider`, falling back to a ripgrep
+   `def|class|function NAME` search.
+3. **Automatic retrieval** (agent mode only; inline edit uses the
+   selection):
+   - keywords from the request: stopwords dropped, plurals folded,
+     identifier-shaped words (snake_case, camelCase, ALLCAPS) weighted ×2;
+   - one ripgrep count per keyword over source + docs files; terms present
+     in more than half the matching files are discarded (e.g. "flask"
+     in the Flask repo); changelogs are skipped;
+   - score = Σ weight · IDF · BM25-style saturated term frequency with
+     file-length normalisation, + 3·IDF when the keyword names the file;
+   - one slot each is reserved for the best **source**, **test** and
+     **doc** file, and tests/docs sharing a name stem with the top source
+     files are boosted ×1.6 — that is where a feature usually has to be
+     wired in (implementation, test, documentation);
+   - files under 30% of the top score are cut; only ±2-line windows
+     around matches are sent, never whole files.
+
+The panel renders a **"Context selected"** card listing each item, its
+reason and its token cost, so Task B visibly shows which files were chosen
+and why. Checked on `pallets/flask` 3.1.3 with the exact Task B wording: it
+selects `src/flask/cli.py`, `tests/test_cli.py` and `docs/cli.rst` (plus
+`config.py`/`config.rst`) in ~4.4k tokens.
+
+## Layer 2 — the agent's tools and their hard budgets
 
 ### 1. `repo_map()`
 - Directory tree + top-level symbols (class/function signatures only, no

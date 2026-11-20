@@ -18,11 +18,11 @@
 │  agent loop: model calls, tool approval, context management,  │
 │  session state, streaming                                     │
 └──────────────────────────┬────────────────────────────────────┘
-                            │ MCP (tool calls over HTTP, registered
-                            │ as a localhost connector, no auth)
+                            │ MCP over streamable HTTP; connector
+                            │ auto-registered, per-activation bearer token
                             ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ Our MCP tool server (mcp-server/), running alongside the       │
+│ Our MCP tool server (extension/src/mcpServer/), inside the    │
 │ extension, with real access to the open workspace:              │
 │   repo_map · search_code · read_file · propose_edit (approval) │
 │   · run_terminal_command (approval) · go_to_definition          │
@@ -42,10 +42,10 @@
   resolves the TrueForge approval event. This is also what makes
   cancellation trivially safe (B3/A3): if a turn is cancelled before
   approval, nothing was ever written.
-- **The MCP server runs locally, no auth.** Per TrueForge's own docs, MCP
-  servers are registered by URL in Settings → Connectors; ours is
-  `http://localhost:<port>/mcp`, registered once at extension startup or
-  via a one-time setup step documented in `docs/SETUP.md`.
+- **The MCP server runs inside the extension host** (it needs `vscode.*`
+  symbol/definition APIs). On activation the extension registers it with
+  TrueForge (`POST/PUT /api/v1/settings/mcp-servers`) under a fresh bearer
+  token, and the agent spec attaches it by name (`spec.mcpServers`).
 
 ## Data flow for a single agent-mode turn (Task B shape)
 1. User types an instruction in the webview panel, no files named.
@@ -58,12 +58,16 @@
 6. User accepts/rejects per hunk; accepted hunks applied via `applyEdit`.
 7. `turn.done` fires; webview shows final status.
 
-## Key files (once built)
+## Key files
 | Path | Responsibility |
 |---|---|
-| `extension/src/extension.ts` | Activation, command registration (forked skeleton) |
-| `extension/src/trueforgeClient.ts` | Thin wrapper around `@truefoundry/trueforge-sdk` |
-| `extension/src/webview/` | Chat/agent-mode panel (plain HTML/CSS/JS) |
-| `extension/src/diffHandler.ts` | Renders tool-approval events as diffs, applies accepted hunks |
-| `mcp-server/src/server.ts` | HTTP MCP server entry point |
-| `mcp-server/src/tools/*.ts` | One file per tool |
+| `extension/agents/coding-agent.json` | Agent definition: instructions, MCP attachment, approval-gated tools, compaction/subagents |
+| `extension/src/extension.ts` | Activation, commands, run orchestration, approval → review UI bridge |
+| `extension/src/turnRunner.ts` | Streaming, `tool.approval_required` handling, cancel, watchdog, retry/backoff, fallback |
+| `extension/src/contextAssembler.ts` | `@file`/`@symbol` + budgeted auto-retrieval |
+| `extension/src/trueforgeClient.ts` / `trueforgeSetup.ts` | SDK client + agent spec / connector registration |
+| `extension/src/diffPreview.ts` | Proposed change in VS Code's diff editor |
+| `extension/src/mcpServer/mcpServer.ts` | MCP server + the six tools |
+| `extension/src/mcpServer/approvalRegistry.ts` | Recorded decisions (native path) + in-process fallback gate |
+| `extension/src/mcpServer/editJournal.ts` | Save-to-disk, per-change undo, whole-run rollback |
+| `extension/src/webview/agentPanel.ts` | Panel: stream, tool log, context card, hunk review, undo |
