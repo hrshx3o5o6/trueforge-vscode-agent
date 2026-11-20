@@ -33,6 +33,10 @@
       {
         "command": "trueforgeAgent.inlineEdit",
         "title": "TrueForge Agent: Inline Edit Selection"
+      },
+      {
+        "command": "trueforgeAgent.cancel",
+        "title": "TrueForge Agent: Cancel Run"
       }
     ],
     "menus": {
@@ -61,6 +65,12 @@
         "mac": "cmd+l",
         "win": "ctrl+l",
         "linux": "ctrl+l"
+      },
+      {
+        "command": "trueforgeAgent.cancel",
+        "key": "ctrl+shift+backspace",
+        "mac": "cmd+shift+backspace",
+        "when": "trueforgeAgent.running"
       }
     ],
     "configuration": {

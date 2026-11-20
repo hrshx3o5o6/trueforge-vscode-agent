@@ -6,7 +6,7 @@
  * HTTP request from TrueForge just stays open, which is a normal,
  * supported thing to do with a long-running tool call.
  */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { ProposeEditResult, EditHunk } from "./tools/proposeEdit.js";
 
 export interface PendingEditRequest {
@@ -90,4 +90,58 @@ export function rejectAllPending(): void {
   pendingEdits.clear();
   for (const [, pending] of pendingCommands) {pending.resolve(false);}
   pendingCommands.clear();
+}
+
+// ---------------------------------------------------------------------
+// TrueForge-native approval path. TrueForge pauses the turn BEFORE it
+// calls propose_edit / run_terminal_command (requireApprovalForTools in
+// agents/coding-agent.json). The extension renders the review from the
+// tool call's arguments, records the user's per-hunk decision here, and
+// only then answers TrueForge with allow/deny. When the tool call
+// arrives, the MCP handler consumes the recorded decision instead of
+// asking again. If no decision was recorded (approval not configured on
+// the TrueForge side), the handler falls back to the in-process gate
+// above, so a write can never happen without a human decision.
+// ---------------------------------------------------------------------
+const decidedEdits = new Map<string, Set<number>>();
+const approvedCommands = new Map<string, number>();
+let writesBlocked = false;
+
+function editKey(path: string, newContent: string): string {
+  return path + "\0" + createHash("sha256").update(newContent).digest("hex");
+}
+
+export function recordEditDecision(path: string, newContent: string, accepted: Set<number>): void {
+  decidedEdits.set(editKey(path, newContent), accepted);
+}
+
+export function takeEditDecision(path: string, newContent: string): Set<number> | undefined {
+  const key = editKey(path, newContent);
+  const decision = decidedEdits.get(key);
+  decidedEdits.delete(key);
+  return decision;
+}
+
+export function recordCommandApproval(command: string): void {
+  approvedCommands.set(command, (approvedCommands.get(command) ?? 0) + 1);
+}
+
+export function takeCommandApproval(command: string): boolean {
+  const n = approvedCommands.get(command) ?? 0;
+  if (n === 0) {return false;}
+  if (n === 1) {approvedCommands.delete(command);} else {approvedCommands.set(command, n - 1);}
+  return true;
+}
+
+/** Set while no turn is running or after Cancel: late tool calls must not write. */
+export function setWritesBlocked(blocked: boolean): void {
+  writesBlocked = blocked;
+  if (blocked) {
+    decidedEdits.clear();
+    approvedCommands.clear();
+  }
+}
+
+export function writesAreBlocked(): boolean {
+  return writesBlocked;
 }

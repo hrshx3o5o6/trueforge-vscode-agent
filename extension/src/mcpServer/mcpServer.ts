@@ -21,12 +21,16 @@ import type * as http from "node:http";
 import { buildRepoMap, REPO_MAP_TOKEN_BUDGET } from "./tools/repoMap.js";
 import { searchCode, SEARCH_MAX_RESULTS } from "./tools/searchCode.js";
 import { readFile } from "./tools/readFile.js";
-import { proposeEdit, applyApprovedContent, reconstructContentFromAcceptedHunks } from "./tools/proposeEdit.js";
+import { proposeEdit, reconstructContentFromAcceptedHunks } from "./tools/proposeEdit.js";
+import { applyAndRecord } from "./editJournal.js";
 import { runTerminalCommand } from "./tools/runTerminalCommand.js";
 import { goToDefinition } from "./tools/goToDefinition.js";
 import {
   requestEditApproval,
   requestCommandApproval,
+  takeEditDecision,
+  takeCommandApproval,
+  writesAreBlocked,
   onEditProposed,
   onCommandProposed,
   type PendingEditRequest,
@@ -122,36 +126,38 @@ function createMcpServer(notify: (name: string, args: unknown) => void): McpServ
     },
     async ({ path, new_content }) => {
       notify("propose_edit", { path });
+      if (writesAreBlocked()) {
+        return { content: [{ type: "text", text: `The run was cancelled; ${path} was not changed. Stop now.` }] };
+      }
       const result = await proposeEdit(path, new_content);
 
       if (result.hunks.length === 0) {
         return { content: [{ type: "text", text: `No changes: ${result.path} already matches the proposed content.` }] };
       }
 
-      // Blocks here — does not resolve until the webview relays the
-      // user's decision via approvalRegistry.resolveEdit(). See
-      // mcpServer.ts module doc + proposeEdit.ts's architecture note.
-      const decision = await requestEditApproval(result);
-
-      if (decision.acceptedHunkIndices.size === 0) {
+      // Normal path: TrueForge paused for approval before calling us and
+      // the user already picked hunks in the review card. Fallback path:
+      // no recorded decision, so block here on the in-process gate.
+      let accepted = takeEditDecision(result.path, new_content);
+      if (!accepted) {
+        accepted = (await requestEditApproval(result)).acceptedHunkIndices;
+      }
+      if (writesAreBlocked()) {
+        return { content: [{ type: "text", text: `The run was cancelled; ${result.path} was not changed. Stop now.` }] };
+      }
+      if (accepted.size === 0) {
         return { content: [{ type: "text", text: `User rejected all ${result.hunks.length} hunk(s) for ${result.path}. No changes were made.` }] };
       }
 
-      const finalContent = reconstructContentFromAcceptedHunks(
-        result.path,
-        result.oldContent,
-        result.hunks,
-        decision.acceptedHunkIndices,
-      );
-      await applyApprovedContent(result.path, finalContent);
+      const finalContent = reconstructContentFromAcceptedHunks(result.path, result.oldContent, result.hunks, accepted);
+      await applyAndRecord(result.path, result.oldContent, result.fileExisted, finalContent);
 
-      const acceptedCount = decision.acceptedHunkIndices.size;
-      const partial = acceptedCount < result.hunks.length;
+      const partial = accepted.size < result.hunks.length;
       return {
         content: [
           {
             type: "text",
-            text: `Applied ${acceptedCount} of ${result.hunks.length} hunk(s) to ${result.path}.${partial ? " Some hunks were rejected by the user — re-read the file if you need its exact current state." : ""}`,
+            text: `Applied ${accepted.size} of ${result.hunks.length} hunk(s) to ${result.path} (saved to disk).${partial ? " Some hunks were rejected by the user — re-read the file if you need its exact current state." : ""}`,
           },
         ],
       };
@@ -167,7 +173,10 @@ function createMcpServer(notify: (name: string, args: unknown) => void): McpServ
     },
     async ({ command }) => {
       notify("run_terminal_command", { command });
-      const approved = await requestCommandApproval(command);
+      if (writesAreBlocked()) {
+        return { content: [{ type: "text", text: `The run was cancelled; did not run: ${command}` }] };
+      }
+      const approved = takeCommandApproval(command) || (await requestCommandApproval(command));
       if (!approved) {
         return { content: [{ type: "text", text: `User declined to run: ${command}` }] };
       }
