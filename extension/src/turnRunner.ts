@@ -82,14 +82,26 @@ export class TurnController {
 
   get isCancelled(): boolean {return this.cancelled;}
 
-  /** Immediate: stops local processing, aborts the stream, cancels server-side. */
-  async cancel(): Promise<void> {
-    if (this.cancelled) {return;}
+  private cancelDone: Promise<void> = Promise.resolve();
+
+  /** Immediate: cancels server-side first, then aborts the local stream.
+   * run() does not return until the server-side cancel has completed, so
+   * a turn can never be left paused/running on TrueForge. */
+  cancel(): Promise<void> {
+    if (this.cancelled) {return this.cancelDone;}
     this.cancelled = true;
-    this.abort.abort();
-    if (this.sessionId) {
-      await this.client.sessions.cancel(this.sessionId).catch(() => undefined);
-    }
+    const sessionId = this.sessionId;
+    this.cancelDone = (async () => {
+      if (sessionId) {
+        try {
+          await this.client.sessions.cancel(sessionId);
+        } catch (err) {
+          this.cb.onStatus(`Server-side cancel failed: ${errorText(err)}`, "warn");
+        }
+      }
+      this.abort.abort();
+    })();
+    return this.cancelDone;
   }
 
   async run(userMessage: string, opts: TurnOptions): Promise<TurnResult> {
@@ -102,7 +114,7 @@ export class TurnController {
     let lastError = "";
     for (let i = 0; i < plan.length; i++) {
       const { model, fallback } = plan[i];
-      if (this.cancelled) {return { status: "cancelled", usedFallback: fallback, sessionId };}
+      if (this.cancelled) {await this.cancelDone; return { status: "cancelled", usedFallback: fallback, sessionId };}
       if (i > 0) {
         await this.cb.beforeRetry();
         if (fallback) {
@@ -121,12 +133,13 @@ export class TurnController {
         }
         this.sessionId = sessionId;
         const outcome = await this.attempt(sessionId, userMessage);
+        if (outcome.status === "cancelled") {await this.cancelDone;}
         if (outcome.status !== "failed") {
           return { status: outcome.status, usedFallback: fallback, sessionId, model: model.name };
         }
         lastError = outcome.error ?? "unknown error";
       } catch (err) {
-        if (this.cancelled) {return { status: "cancelled", usedFallback: fallback, sessionId };}
+        if (this.cancelled) {await this.cancelDone; return { status: "cancelled", usedFallback: fallback, sessionId };}
         lastError = errorText(err);
         // A stale reused session (e.g. TrueForge restarted) — start fresh next time.
         if (/404|not found/i.test(lastError)) {sessionId = undefined;}
