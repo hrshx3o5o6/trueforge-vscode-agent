@@ -52,3 +52,18 @@ Last updated 2026-11-20 (branch `fix/audit-findings`).
 - [ ] Demo video (≤ 4 min, tasks A → B → C, show TrueForge session in B)
 - [ ] Write-up PDF (8 headings — see `docs/WRITEUP_OUTLINE.md`)
 - [ ] Make the GitHub repo public before 20 Nov 23:59 IST
+
+## Subagent spike (2026-11-22)
+Standalone script against TrueForge local mode (`openai/gpt-5-4-mini`), using
+the agent definition's instructions with the new SUBAGENTS paragraph, a
+throwaway MCP connector with `search_code`/`read_file`, and the Task B wording:
+- The parent spawns a dynamic subagent through the TrueForge system tool
+  **`create_sub_agent`** (`toolInfo.type: "truefoundry-system"`), args
+  `{name: "explorer", input: …}`, within ~6 s.
+- The child **does get the parent's MCP tools**: 16 `search_code`/`read_file`
+  calls were served on the child's thread.
+- `thread.created` (with `agentInfo.name/input` and `parent.threadId/toolCallId`)
+  and `thread.done` (`state.status: "done"`) **arrive on the turn stream**.
+- The root thread's id is the literal string `main`; the child gets a ULID.
+- The parent then reported `src/flask/cli.py`, `tests/test_cli.py`,
+  `docs/cli.rst` as the files to change.

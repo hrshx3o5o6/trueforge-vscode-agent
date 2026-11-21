@@ -294,7 +294,7 @@ async function handleInlineEdit(): Promise<void> {
     `Instruction: ${instruction}\n\n` +
     `Change only what the instruction requires, within or directly tied to the selection. ` +
     `Read ${relativePath} with read_file (a line range is enough) only if you need surrounding code, ` +
-    `then call propose_edit once with the full new content of ${relativePath}. Do not edit other files.`;
+    `then call propose_edit once with the full new content of ${relativePath}. Do not edit other files. Do not spawn subagents.`;
 
   // Inline edit: only explicit @mentions in the instruction, no automatic
   // retrieval — the selection is the context, and the edit is single-file.
