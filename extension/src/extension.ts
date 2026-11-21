@@ -101,7 +101,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   mcpServerHandle.onCommandProposed((req) => {
     panel().post({ type: "command_review", requestId: req.requestId, command: req.command });
   });
-  mcpServerHandle.onToolCall((name, args) => AgentPanel.current?.post({ type: "tool_call", name, args }));
   onApplied((e) => {
     const added = e.after.split("\n").length - (e.existed ? e.before.split("\n").length : 0);
     AgentPanel.current?.post({ type: "applied", entryId: e.id, path: e.path, existed: e.existed, lineDelta: added });
@@ -212,7 +211,13 @@ async function runRequest(opts: RunOptions): Promise<{ status: string; error?: s
   const turn = beginTurn();
   const controller = new TurnController(client, {
     onDelta: (t) => { p.post({ type: "delta", content: t }); opts.onDelta?.(t); },
-    onToolCall: () => undefined, // the MCP server reports actual executions (onToolCall above)
+    // Tool calls are reported from TrueForge's own events (not the MCP
+    // server) because only those say which thread, root or subagent, made them.
+    onToolCall: (name, args, subagent, at) => p.post({ type: "tool_call", name, args, subagent, at }),
+    onSubagentStart: (s) => p.post({ type: "subagent_start", threadId: s.threadId, name: s.name, input: s.input, at: s.at }),
+    onSubagentDelta: (threadId, _name, content) => p.post({ type: "subagent_delta", threadId, content }),
+    onSubagentDone: (d) => p.post({ type: "subagent_done", ...d }),
+    onCompaction: (c) => p.post({ type: "compaction", ...c }),
     onStatus: (message, level) => p.post({ type: "status", level, message }),
     onApproval: reviewToolCall,
     beforeRetry: async () => {

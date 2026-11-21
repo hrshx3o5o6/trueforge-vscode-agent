@@ -17,6 +17,7 @@
  */
 import { mergeEventDelta, type TrueForge, type TrueForgeApi } from "@truefoundry/trueforge-sdk";
 import { buildAgentSpec, type AgentModelConfig } from "./trueforgeClient.js";
+import { ThreadRouter, type CompactionInfo, type SubagentDone, type SubagentStart } from "./threadRouter.js";
 
 export interface ApprovalRequest {
   toolCallId: string;
@@ -26,8 +27,14 @@ export interface ApprovalRequest {
 export type ApprovalAnswer = { allow: true } | { allow: false; reason: string };
 
 export interface TurnCallbacks {
+  /** Text from the root thread only; subagent text goes to onSubagentDelta. */
   onDelta: (text: string) => void;
-  onToolCall: (name: string, args: Record<string, unknown>) => void;
+  /** A tool call TrueForge executed; `subagent` names the child thread that made it. */
+  onToolCall: (name: string, args: Record<string, unknown>, subagent?: string, at?: string) => void;
+  onSubagentStart?: (s: SubagentStart) => void;
+  onSubagentDelta?: (threadId: string, name: string, text: string) => void;
+  onSubagentDone?: (d: SubagentDone) => void;
+  onCompaction?: (c: CompactionInfo) => void;
   onStatus: (message: string, level: "info" | "warn" | "error") => void;
   onApproval: (req: ApprovalRequest) => Promise<ApprovalAnswer>;
   /** Called before a retry / fallback so the caller can undo a failed attempt's edits. */
@@ -171,6 +178,14 @@ export class TurnController {
     let turnId: string | undefined;
     let outcome: AttemptOutcome | undefined;
     let stalled = false;
+    // One router per attempt: a retry or fallback starts a fresh turn.
+    const router = new ThreadRouter({
+      onRootDelta: (t) => this.cb.onDelta(t),
+      onSubagentStart: (st) => this.cb.onSubagentStart?.(st),
+      onSubagentDelta: (id, name, t) => this.cb.onSubagentDelta?.(id, name, t),
+      onSubagentDone: (d) => this.cb.onSubagentDone?.(d),
+      onCompaction: (c) => this.cb.onCompaction?.(c),
+    });
 
     this.lastEventAt = Date.now();
     const stallMs = this.stallMs;
@@ -183,12 +198,12 @@ export class TurnController {
 
     const handle = (e: TrueForgeApi.TurnStreamingEvent | TrueForgeApi.SessionEvent): void => {
       this.lastEventAt = Date.now();
+      router.handle(e as TrueForgeApi.TurnStreamingEvent);
       switch (e.type) {
         case "turn.created":
           turnId = e.turnId;
           break;
         case "model.message.delta": {
-          if (e.content) {this.cb.onDelta(e.content);}
           const base = currentByThread.get(e.threadId);
           if (base && e.toolCalls?.length) {mergeEventDelta(base, e);}
           break;
@@ -201,7 +216,7 @@ export class TurnController {
           if (!reported.has(e.toolCallId)) {
             reported.add(e.toolCallId);
             const call = findCall(e.toolCallId);
-            if (call) {this.cb.onToolCall(call.name, call.args);}
+            if (call) {this.cb.onToolCall(call.name, call.args, router.subagentName(e.threadId), e.createdAt);}
           }
           break;
         case "tool.approval_required":
