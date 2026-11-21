@@ -151,6 +151,22 @@ export class AgentPanel {
     background: color-mix(in srgb, var(--vscode-charts-purple) 6%, transparent);
   }
   .context-card li { margin: 1px 0; }
+
+  /* Dynamic subagent (TrueForge create_sub_agent): its own card, never mixed into the main answer. */
+  .subagent-card {
+    align-self: stretch; max-width: 100%; border: 1px solid var(--vscode-panel-border);
+    border-left: 3px solid var(--vscode-textLink-foreground); border-radius: 0 6px 6px 0;
+    background: color-mix(in srgb, var(--vscode-textLink-foreground) 5%, transparent); font-size: 12px;
+  }
+  .subagent-head { display: flex; align-items: baseline; gap: 6px; padding: 5px 8px; cursor: pointer; }
+  .subagent-head > span:first-child, .subagent-head code { flex: none; white-space: nowrap; }
+  .subagent-head .sa-input { flex: 1 1 auto; color: var(--vscode-descriptionForeground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .subagent-head .sa-badge { flex: none; font-size: 10.5px; padding: 0 6px; border-radius: 8px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
+  .subagent-card.failed .sa-badge { background: var(--vscode-errorForeground); }
+  .subagent-body { padding: 0 8px 6px 20px; display: flex; flex-direction: column; gap: 3px; }
+  .subagent-card.collapsed .subagent-body { display: none; }
+  .subagent-body .sa-text { white-space: pre-wrap; line-height: 1.45; max-height: 180px; overflow-y: auto; }
+  .subagent-body .sa-text:empty { display: none; }
   .cmd-text {
     font-family: var(--vscode-editor-font-family); background: var(--vscode-textCodeBlock-background);
     padding: 6px 8px; border-radius: 5px; display: block; margin: 6px 0; font-size: 12px;
@@ -300,6 +316,33 @@ export class AgentPanel {
       vscode.postMessage({ type: 'export_trace', trace: JSON.stringify(trace, null, 2) });
     });
 
+    // --- Subagent cards, keyed by TrueForge thread id ---
+    const subagentCards = new Map();
+    const latestByName = new Map();
+    function subagentCard(threadId, name, input) {
+      let card = subagentCards.get(threadId);
+      if (!card) {
+        const firstLine = String(input || '').split('\\n')[0].slice(0, 120);
+        card = append(
+          '<div class="subagent-card running">' +
+          '<div class="subagent-head"><span>⑂ Subagent</span><code>' + esc(name) + '</code>' +
+          '<span class="sa-input">' + esc(firstLine) + '</span><span class="sa-badge">running…</span></div>' +
+          '<div class="subagent-body"><div class="sa-text"></div><div class="sa-tools"></div></div></div>'
+        ).firstElementChild;
+        card.querySelector('.subagent-head').addEventListener('click', () => card.classList.toggle('collapsed'));
+        subagentCards.set(threadId, card);
+      }
+      latestByName.set(name, card);
+      return card;
+    }
+    function closeOpenSubagents(status) {
+      subagentCards.forEach((card) => {
+        if (!card.classList.contains('running')) return;
+        card.classList.remove('running');
+        card.querySelector('.sa-badge').textContent = status;
+      });
+    }
+
     sendBtn.addEventListener('click', () => {
       const text = input.value.trim();
       if (!text) return;
@@ -396,6 +439,31 @@ export class AgentPanel {
         } else {
           append('<div class="delta-stream">' + esc(msg.content) + '</div>');
         }
+      } else if (msg.type === 'subagent_start') {
+        subagentCard(msg.threadId, msg.name, msg.input);
+      } else if (msg.type === 'subagent_delta') {
+        const text = subagentCard(msg.threadId, 'subagent', '').querySelector('.sa-text');
+        text.textContent += msg.content;
+        text.scrollTop = text.scrollHeight;
+      } else if (msg.type === 'subagent_done') {
+        const card = subagentCard(msg.threadId, msg.name, '');
+        card.classList.remove('running');
+        card.classList.add('collapsed');
+        if (!msg.ok) card.classList.add('failed');
+        card.querySelector('.sa-badge').textContent = msg.ok
+          ? 'done' + (msg.durationMs != null ? ' in ' + (msg.durationMs / 1000).toFixed(1) + 's' : '')
+          : 'failed: ' + (msg.error || 'unknown error');
+      } else if (msg.type === 'compaction') {
+        if (msg.phase === 'finished') {
+          append('<div class="status-info">Context compacted (≈' + esc(msg.contextTokens) + ' tokens over the ' + esc(msg.thresholdTokens) +
+            ' threshold' + (msg.durationMs != null ? ', ' + (msg.durationMs / 1000).toFixed(1) + 's' : '') + ')</div>');
+        }
+      } else if (msg.type === 'tool_call' && msg.subagent) {
+        const card = latestByName.get(msg.subagent) || subagentCard('anon-' + msg.subagent, msg.subagent, '');
+        const row = document.createElement('div');
+        row.className = 'tool-call';
+        row.textContent = msg.name + '(' + JSON.stringify(msg.args) + ')';
+        card.querySelector('.sa-tools').appendChild(row);
       } else if (msg.type === 'tool_call') {
         append('<div class="tool-call">' + esc(msg.name) + '(' + esc(JSON.stringify(msg.args)) + ')</div>');
         recordTrace('tool', msg.name + '(' + Object.keys(msg.args || {}).join(', ') + ')', JSON.stringify(msg.args, null, 2), ['B1', 'B4']);
@@ -406,6 +474,7 @@ export class AgentPanel {
         renderCommandReview(msg);
         recordTrace('approval', 'run_terminal_command awaiting review', msg.command, ['B2']);
       } else if (msg.type === 'run_started') {
+        closeOpenSubagents('stopped');
         setRunning(true);
       } else if (msg.type === 'status') {
         append('<div class="status-' + esc(msg.level) + '">' + esc(msg.message) + '</div>');
@@ -438,6 +507,7 @@ export class AgentPanel {
         if (msg.error) { append('<div class="status-error">' + esc(msg.error) + '</div>'); }
         const via = msg.model ? ' · ' + esc(msg.model) + (msg.usedFallback ? ' (fallback)' : '') : '';
         const sess = msg.sessionId ? ' · session ' + esc(msg.sessionId) : '';
+        closeOpenSubagents(msg.status === 'cancelled' ? 'cancelled' : 'stopped');
         append('<div class="run-end">— ' + esc(msg.status || 'done') + via + sess + ' —</div>');
         recordTrace('turn', 'Turn ' + (msg.status || 'done') + via,
           (msg.error || '') + (msg.sessionId ? '\\nsession: ' + msg.sessionId : ''),
