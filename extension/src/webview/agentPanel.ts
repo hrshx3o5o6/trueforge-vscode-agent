@@ -178,11 +178,64 @@ export class AgentPanel {
   }
   #input:focus { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
   #composer-actions { display: flex; gap: 6px; justify-content: flex-end; }
+
+  /* --- Agent Trace: structured, timestamped record of harness activity --- */
+  #header { justify-content: space-between; }
+  #header-left { display: flex; align-items: center; gap: 6px; }
+  #trace-toggle { font-size: 11px; padding: 2px 8px; text-transform: none; letter-spacing: normal; }
+  #main { flex: 1 1 auto; display: flex; min-height: 0; }
+  #main #transcript { flex: 1 1 auto; }
+  #trace-panel {
+    display: none; flex: 0 0 340px; flex-direction: column; min-height: 0;
+    border-left: 1px solid var(--vscode-panel-border);
+  }
+  #trace-panel.open { display: flex; }
+  #trace-header {
+    flex: none; display: flex; justify-content: space-between; align-items: center;
+    padding: 6px 10px; border-bottom: 1px solid var(--vscode-panel-border);
+    font-size: 11px; font-weight: 600; text-transform: uppercase; color: var(--vscode-descriptionForeground);
+  }
+  #trace-list { flex: 1 1 auto; overflow-y: auto; padding: 6px 8px; display: flex; flex-direction: column; gap: 4px; }
+  .trace-row {
+    font-family: var(--vscode-editor-font-family); font-size: 11px; line-height: 1.4;
+    border-left: 3px solid var(--vscode-panel-border); padding: 3px 6px; cursor: pointer;
+    background: var(--vscode-textCodeBlock-background); border-radius: 0 4px 4px 0;
+  }
+  .trace-row.cat-tool { border-left-color: var(--vscode-charts-blue); }
+  .trace-row.cat-context { border-left-color: var(--vscode-charts-purple); }
+  .trace-row.cat-approval { border-left-color: var(--vscode-charts-orange); }
+  .trace-row.cat-write { border-left-color: var(--vscode-charts-green); }
+  .trace-row.cat-resilience { border-left-color: var(--vscode-charts-yellow); }
+  .trace-row.cat-turn { border-left-color: var(--vscode-descriptionForeground); }
+  .trace-row.cat-error { border-left-color: var(--vscode-errorForeground); }
+  .trace-row .trace-time { color: var(--vscode-descriptionForeground); margin-right: 6px; }
+  .trace-row .trace-badge {
+    display: inline-block; font-size: 9.5px; font-weight: 700; padding: 0 4px; border-radius: 3px;
+    background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); margin-right: 4px;
+  }
+  .trace-row .trace-detail {
+    display: none; white-space: pre-wrap; margin-top: 3px; padding-top: 3px;
+    border-top: 1px dashed var(--vscode-panel-border); color: var(--vscode-descriptionForeground); font-size: 10.5px;
+  }
+  .trace-row.expanded .trace-detail { display: block; }
+  #trace-empty { padding: 10px; font-size: 11px; color: var(--vscode-descriptionForeground); font-style: italic; }
 </style>
 </head>
 <body>
-  <div id="header"><span class="dot"></span>TrueForge Agent</div>
-  <div id="transcript"></div>
+  <div id="header">
+    <div id="header-left"><span class="dot"></span>TrueForge Agent</div>
+    <button id="trace-toggle">Trace ▸</button>
+  </div>
+  <div id="main">
+    <div id="transcript"></div>
+    <div id="trace-panel">
+      <div id="trace-header">
+        <span id="trace-count">Agent Trace (0)</span>
+        <button id="trace-download">Download JSON</button>
+      </div>
+      <div id="trace-list"><div id="trace-empty">Nothing recorded yet — send a message to start the trace.</div></div>
+    </div>
+  </div>
   <div id="composer">
     <textarea id="input" rows="3" placeholder="Describe the change you want... (Cmd/Ctrl+Enter to send)"></textarea>
     <div id="composer-actions">
@@ -196,6 +249,12 @@ export class AgentPanel {
     const input = document.getElementById('input');
     const sendBtn = document.getElementById('send');
     const cancelBtn = document.getElementById('cancel');
+    const tracePanel = document.getElementById('trace-panel');
+    const traceToggle = document.getElementById('trace-toggle');
+    const traceList = document.getElementById('trace-list');
+    const traceCount = document.getElementById('trace-count');
+    const traceDownload = document.getElementById('trace-download');
+    const traceEmpty = document.getElementById('trace-empty');
 
     function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 
@@ -207,10 +266,45 @@ export class AgentPanel {
       return div;
     }
 
+    // --- Agent Trace: a structured, timestamped record of real harness ---
+    // activity (tool calls, context selection, resilience events, approval
+    // decisions), independent of the chat transcript above. Every entry is
+    // built from the SAME backend messages the transcript already renders
+    // (and the user's own decisions), so it adds zero new backend surface --
+    // purely an alternate, exportable view of what already happened.
+    const trace = [];
+    function fmtTime(ts) {
+      const d = new Date(ts);
+      return d.toTimeString().slice(0, 8) + '.' + String(d.getMilliseconds()).padStart(3, '0');
+    }
+    function recordTrace(category, summary, detail, criteria) {
+      const entry = { t: Date.now(), category, summary, detail: detail || '', criteria: criteria || [] };
+      trace.push(entry);
+      traceCount.textContent = 'Agent Trace (' + trace.length + ')';
+      if (traceEmpty) { traceEmpty.remove(); }
+      const row = document.createElement('div');
+      row.className = 'trace-row cat-' + category;
+      const badges = entry.criteria.map((c) => '<span class="trace-badge">' + esc(c) + '</span>').join('');
+      row.innerHTML = '<span class="trace-time">' + fmtTime(entry.t) + '</span>' + badges + esc(summary) +
+        (entry.detail ? '<div class="trace-detail">' + esc(entry.detail) + '</div>' : '');
+      row.addEventListener('click', () => row.classList.toggle('expanded'));
+      traceList.appendChild(row);
+      traceList.scrollTop = traceList.scrollHeight;
+      return entry;
+    }
+    traceToggle.addEventListener('click', () => {
+      const open = tracePanel.classList.toggle('open');
+      traceToggle.textContent = open ? 'Trace \u25be' : 'Trace \u25b8';
+    });
+    traceDownload.addEventListener('click', () => {
+      vscode.postMessage({ type: 'export_trace', trace: JSON.stringify(trace, null, 2) });
+    });
+
     sendBtn.addEventListener('click', () => {
       const text = input.value.trim();
       if (!text) return;
       append('<div class="msg-user">' + esc(text) + '</div>');
+      recordTrace('turn', 'User sent a request', text, ['A2']);
       input.value = '';
       setRunning(true);
       vscode.postMessage({ type: 'send', text });
@@ -218,6 +312,7 @@ export class AgentPanel {
 
     cancelBtn.addEventListener('click', () => {
       cancelBtn.disabled = true;
+      recordTrace('turn', 'User cancelled the run', '', ['A3']);
       vscode.postMessage({ type: 'cancel' });
     });
     input.addEventListener('keydown', (e) => {
@@ -264,6 +359,8 @@ export class AgentPanel {
 
       function submitEdit() {
         const accepted = checkboxes().filter((cb) => cb.checked).map((cb) => Number(cb.dataset.index));
+        recordTrace('approval', 'User reviewed ' + esc(msg.path) + ': ' + accepted.length + '/' + msg.hunks.length + ' hunk(s) accepted',
+          accepted.length === msg.hunks.length ? 'accept all' : accepted.length === 0 ? 'reject all' : 'partial (hunks ' + accepted.join(',') + ')', ['B2']);
         vscode.postMessage({ type: 'edit_decision', requestId: msg.requestId, acceptedHunkIndices: accepted });
         card.querySelectorAll('button, input').forEach((el) => (el.disabled = true));
         card.insertAdjacentHTML('beforeend', '<div class="run-end">Decision sent (' + accepted.length + '/' + msg.hunks.length + ' hunks accepted).</div>');
@@ -279,10 +376,12 @@ export class AgentPanel {
         '</div>'
       );
       card.querySelector('.approve').addEventListener('click', () => {
+        recordTrace('approval', 'User approved command', msg.command, ['B2']);
         vscode.postMessage({ type: 'command_decision', requestId: msg.requestId, approved: true });
         card.querySelectorAll('button').forEach((el) => (el.disabled = true));
       });
       card.querySelector('.deny').addEventListener('click', () => {
+        recordTrace('approval', 'User denied command', msg.command, ['B2']);
         vscode.postMessage({ type: 'command_decision', requestId: msg.requestId, approved: false });
         card.querySelectorAll('button').forEach((el) => (el.disabled = true));
       });
@@ -299,35 +398,50 @@ export class AgentPanel {
         }
       } else if (msg.type === 'tool_call') {
         append('<div class="tool-call">' + esc(msg.name) + '(' + esc(JSON.stringify(msg.args)) + ')</div>');
+        recordTrace('tool', msg.name + '(' + Object.keys(msg.args || {}).join(', ') + ')', JSON.stringify(msg.args, null, 2), ['B1', 'B4']);
       } else if (msg.type === 'edit_review') {
         renderEditReview(msg);
+        recordTrace('approval', 'propose_edit awaiting review: ' + msg.path + ' (' + msg.hunks.length + ' hunk(s))', '', ['B2']);
       } else if (msg.type === 'command_review') {
         renderCommandReview(msg);
+        recordTrace('approval', 'run_terminal_command awaiting review', msg.command, ['B2']);
       } else if (msg.type === 'run_started') {
         setRunning(true);
       } else if (msg.type === 'status') {
         append('<div class="status-' + esc(msg.level) + '">' + esc(msg.message) + '</div>');
+        const isResilience = /retry|retrying|fallback|switching to fallback/i.test(msg.message);
+        recordTrace(isResilience ? 'resilience' : 'turn', msg.message, '', isResilience ? ['B3'] : []);
       } else if (msg.type === 'context') {
         const items = msg.items.map((it) =>
           '<li><code>' + esc(it.label) + '</code> — ' + esc(it.reason) + ' (~' + it.tokens + ' tok)</li>').join('');
         append('<div class="context-card"><b>Context selected</b> (' + msg.usedTokens + ' / ' + msg.budget +
           ' token budget)<ul>' + items + '</ul>' + (msg.dropped ? '<i>' + msg.dropped + ' lower-ranked candidate(s) left out to stay in budget</i>' : '') + '</div>');
+        const detail = msg.items.map((it) => it.label + ' — ' + it.reason + ' (~' + it.tokens + ' tok)').join('\\n');
+        recordTrace('context', 'Context selected: ' + msg.items.length + ' item(s), ' + msg.usedTokens + '/' + msg.budget + ' tokens' +
+          (msg.dropped ? ', ' + msg.dropped + ' dropped' : ''), detail, ['B1']);
       } else if (msg.type === 'applied') {
         const div = append('<div class="applied">✔ applied &amp; saved <code>' + esc(msg.path) + '</code>' +
           (msg.existed ? '' : ' (new file)') + '<button class="undo">Undo</button></div>');
         div.querySelector('.undo').addEventListener('click', (ev) => {
           ev.target.disabled = true;
+          recordTrace('write', 'User clicked Undo on ' + msg.path, '', ['B2']);
           vscode.postMessage({ type: 'undo', entryId: msg.entryId });
         });
+        recordTrace('write', 'Applied & saved ' + msg.path + (msg.existed ? '' : ' (new file)'), '', ['B2']);
       } else if (msg.type === 'undone') {
         append('<div class="status-info">↶ ' + esc(msg.message) + '</div>');
+        recordTrace('write', 'Undo: ' + msg.message, '', ['B2']);
       } else if (msg.type === 'error') {
         append('<div class="status-error">' + esc(msg.message) + '</div>');
+        recordTrace('error', msg.message, '', ['B3']);
       } else if (msg.type === 'done') {
         if (msg.error) { append('<div class="status-error">' + esc(msg.error) + '</div>'); }
         const via = msg.model ? ' · ' + esc(msg.model) + (msg.usedFallback ? ' (fallback)' : '') : '';
         const sess = msg.sessionId ? ' · session ' + esc(msg.sessionId) : '';
         append('<div class="run-end">— ' + esc(msg.status || 'done') + via + sess + ' —</div>');
+        recordTrace('turn', 'Turn ' + (msg.status || 'done') + via,
+          (msg.error || '') + (msg.sessionId ? '\\nsession: ' + msg.sessionId : ''),
+          msg.usedFallback ? ['A3', 'B3'] : ['A3']);
         setRunning(false);
       }
     });

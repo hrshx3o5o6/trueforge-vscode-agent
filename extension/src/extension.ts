@@ -136,6 +136,22 @@ async function onPanelMessage(raw: unknown): Promise<void> {
         AgentPanel.current?.post({ type: "undone", entryId: m.entryId, message: msg });
       }
       return;
+    case "export_trace": {
+      const raw = (m as unknown as { trace?: string }).trace;
+      if (!raw) {return;}
+      const defaultName = `trueforge-trace-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+      const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri;
+      const defaultUri = workspaceFolder ? vscode.Uri.joinPath(workspaceFolder, defaultName) : undefined;
+      const target = await vscode.window.showSaveDialog({
+        defaultUri,
+        filters: { JSON: ["json"] },
+        saveLabel: "Export Agent Trace",
+      });
+      if (!target) {return;}
+      await vscode.workspace.fs.writeFile(target, Buffer.from(raw, "utf8"));
+      void vscode.window.showInformationMessage(`Agent trace exported: ${vscode.workspace.asRelativePath(target, false)}`);
+      return;
+    }
     case "send":
       if (m.text) {await runChat(m.text);}
       return;
