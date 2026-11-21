@@ -50,10 +50,17 @@
 ## Data flow for a single agent-mode turn (Task B shape)
 1. User types an instruction in the webview panel, no files named.
 2. Extension calls `client.sessions.createTurnStream(session.id, { input: [...] })`.
-3. TrueForge's agent loop calls our MCP tools in sequence — `repo_map` (if
-   not already given this session), `search_code`, `read_file` — each
-   streamed back as tool-call events the webview can render live.
-4. Agent decides on 3+ files to change, calls `propose_edit` for each.
+3. The agent calls TrueForge's `create_sub_agent` system tool to start a
+   dynamic subagent, `explorer`, on its own child thread. The explorer
+   calls our MCP tools (`repo_map`, `search_code`, `read_file`,
+   `go_to_definition`) and reports back a list of files with reasons.
+   `threadRouter.ts` sorts every streamed event by thread: explorer text
+   and tool calls go to a nested card in the panel and to the Agent Trace,
+   never into the main answer. `thread.created` / `thread.done` give the
+   card its start, end and duration.
+4. The main agent reads the exact lines and calls `propose_edit` for each
+   of the 3+ files. If the model skips delegation, it does the discovery
+   itself and the run still works.
 5. TrueForge pauses each on approval; extension renders a per-hunk diff.
 6. User accepts/rejects per hunk; accepted hunks applied via `applyEdit`.
 7. `turn.done` fires; webview shows final status.
@@ -64,10 +71,11 @@
 | `extension/agents/coding-agent.json` | Agent definition: instructions, MCP attachment, approval-gated tools, compaction/subagents |
 | `extension/src/extension.ts` | Activation, commands, run orchestration, approval → review UI bridge |
 | `extension/src/turnRunner.ts` | Streaming, `tool.approval_required` handling, cancel, watchdog, retry/backoff, fallback |
+| `extension/src/threadRouter.ts` | Sorts streamed events into main thread vs subagent threads; subagent start/done and compaction callbacks |
 | `extension/src/contextAssembler.ts` | `@file`/`@symbol` + budgeted auto-retrieval |
 | `extension/src/trueforgeClient.ts` / `trueforgeSetup.ts` | SDK client + agent spec / connector registration |
 | `extension/src/diffPreview.ts` | Proposed change in VS Code's diff editor |
 | `extension/src/mcpServer/mcpServer.ts` | MCP server + the six tools |
 | `extension/src/mcpServer/approvalRegistry.ts` | Recorded decisions (native path) + in-process fallback gate |
 | `extension/src/mcpServer/editJournal.ts` | Save-to-disk, per-change undo, whole-run rollback |
-| `extension/src/webview/agentPanel.ts` | Panel: stream, tool log, context card, hunk review, undo |
+| `extension/src/webview/agentPanel.ts` | Panel: stream, tool log, context card, subagent cards, hunk review, undo, Agent Trace (exportable JSON) |

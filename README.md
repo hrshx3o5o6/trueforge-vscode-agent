@@ -18,6 +18,7 @@ and change. The extension never calls a model provider directly.
 | Context assembly | `@path/to/file` and `@symbol` mentions, plus automatic retrieval ranked by IDF/BM25 with source/test/doc slots, under a token budget. The panel lists every file chosen and why. See `docs/CONTEXT_STRATEGY.md`. |
 | Diff review | `propose_edit`/`run_terminal_command` require **TrueForge-native tool approval**. The extension answers `tool.approval_required` from the per-hunk review. Nothing is written before approval; applied changes are saved and each has an **Undo** button (Ctrl+Z also works). |
 | Streaming & cancel | Tokens stream from `model.message.delta`. Cancel (button or `Cmd/Ctrl+Shift+Backspace`) aborts the stream, calls `sessions.cancel`, and rolls back every edit applied in that run. |
+| Subagents & Agent Trace | For multi-file tasks the agent delegates discovery to a TrueForge dynamic subagent (`explorer`), shown as its own card with its tool calls and duration, and as a child thread in the TrueForge session. A timestamped Agent Trace (toggle **Trace**) records tool calls by thread, subagents, compaction, approvals and retries, and exports as JSON with the session id. |
 | Resilience | Stall watchdog → retry with exponential backoff → automatic fallback to a second model. A failed run is rolled back and reported clearly. |
 
 ## Setup from a clean clone
