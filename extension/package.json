@@ -134,7 +134,8 @@
     "pretest": "npm run compile-tests && npm run compile && npm run lint",
     "check-types": "tsc --noEmit",
     "lint": "eslint src",
-    "test": "vscode-test"
+    "test": "vscode-test",
+    "test:unit": "esbuild src/test/*.test.ts --bundle --platform=node --format=cjs --outdir=out/test --external:vscode && node --test \"out/test/*.test.js\""
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
