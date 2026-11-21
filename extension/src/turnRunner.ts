@@ -30,7 +30,7 @@ export interface TurnCallbacks {
   /** Text from the root thread only; subagent text goes to onSubagentDelta. */
   onDelta: (text: string) => void;
   /** A tool call TrueForge executed; `subagent` names the child thread that made it. */
-  onToolCall: (name: string, args: Record<string, unknown>, subagent?: string, at?: string) => void;
+  onToolCall: (name: string, args: Record<string, unknown>, subagent?: string, at?: string, threadId?: string) => void;
   onSubagentStart?: (s: SubagentStart) => void;
   onSubagentDelta?: (threadId: string, name: string, text: string) => void;
   onSubagentDone?: (d: SubagentDone) => void;
@@ -216,7 +216,7 @@ export class TurnController {
           if (!reported.has(e.toolCallId)) {
             reported.add(e.toolCallId);
             const call = findCall(e.toolCallId);
-            if (call) {this.cb.onToolCall(call.name, call.args, router.subagentName(e.threadId), e.createdAt);}
+            if (call) {this.cb.onToolCall(call.name, call.args, router.subagentName(e.threadId), e.createdAt, e.threadId);}
           }
           break;
         case "tool.approval_required":

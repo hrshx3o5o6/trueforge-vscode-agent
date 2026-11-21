@@ -18,6 +18,7 @@ import { beginTurn, rollbackTurn, undoEntry, onApplied } from "./mcpServer/editJ
 import { createClient, loadAgentDefinition, type TrueForgeConfig } from "./trueforgeClient.js";
 import { ensureConnector } from "./trueforgeSetup.js";
 import { TurnController, type ApprovalAnswer, type ApprovalRequest } from "./turnRunner.js";
+import { summarizeToolArgs } from "./toolArgs.js";
 import { AgentPanel } from "./webview/agentPanel.js";
 import { ProposedContentProvider, PROPOSED_SCHEME } from "./diffPreview.js";
 import { assembleContext, type ContextItem } from "./contextAssembler.js";
@@ -213,7 +214,8 @@ async function runRequest(opts: RunOptions): Promise<{ status: string; error?: s
     onDelta: (t) => { p.post({ type: "delta", content: t }); opts.onDelta?.(t); },
     // Tool calls are reported from TrueForge's own events (not the MCP
     // server) because only those say which thread, root or subagent, made them.
-    onToolCall: (name, args, subagent, at) => p.post({ type: "tool_call", name, args, subagent, at }),
+    onToolCall: (name, args, subagent, at, threadId) =>
+      p.post({ type: "tool_call", name, args: summarizeToolArgs(args), subagent, threadId: subagent ? threadId : undefined, at }),
     onSubagentStart: (s) => p.post({ type: "subagent_start", threadId: s.threadId, name: s.name, input: s.input, at: s.at }),
     onSubagentDelta: (threadId, _name, content) => p.post({ type: "subagent_delta", threadId, content }),
     onSubagentDone: (d) => p.post({ type: "subagent_done", ...d }),
@@ -221,6 +223,7 @@ async function runRequest(opts: RunOptions): Promise<{ status: string; error?: s
     onStatus: (message, level) => p.post({ type: "status", level, message }),
     onApproval: reviewToolCall,
     beforeRetry: async () => {
+      p.post({ type: "attempt_reset" }); // the failed attempt's subagents are gone
       rejectAllPending();
       const restored = await rollbackTurn(turn);
       if (restored.length) {p.post({ type: "status", level: "info", message: `Rolled back partial edits: ${restored.join(", ")}` });}
