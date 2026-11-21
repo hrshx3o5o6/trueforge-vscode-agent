@@ -110,6 +110,7 @@ export class AgentPanel {
     background: var(--vscode-textCodeBlock-background);
     border-radius: 4px; padding: 3px 7px; opacity: 0.9;
   }
+  .tool-call { overflow-wrap: anywhere; }
   .tool-call::before { content: "›"; margin-right: 5px; opacity: 0.7; }
 
   .status-info, .status-warn, .status-error {
@@ -317,9 +318,13 @@ export class AgentPanel {
 
     // --- Subagent cards, keyed by TrueForge thread id ---
     const subagentCards = new Map();
-    const latestByName = new Map();
     function subagentCard(threadId, name, input) {
       let card = subagentCards.get(threadId);
+      if (card && name !== 'subagent') {
+        // thread.created can arrive after the child's first output: fix the label.
+        card.querySelector('.subagent-head code').textContent = name;
+        if (input) { card.querySelector('.sa-input').textContent = String(input).split('\\n')[0].slice(0, 120); }
+      }
       if (!card) {
         const firstLine = String(input || '').split('\\n')[0].slice(0, 120);
         card = append(
@@ -331,7 +336,6 @@ export class AgentPanel {
         card.querySelector('.subagent-head').addEventListener('click', () => card.classList.toggle('collapsed'));
         subagentCards.set(threadId, card);
       }
-      latestByName.set(name, card);
       return card;
     }
     function closeOpenSubagents(status) {
@@ -432,7 +436,7 @@ export class AgentPanel {
     window.addEventListener('message', (event) => {
       const msg = event.data;
       if (msg.type === 'delta') {
-        const last = transcript.lastElementChild;
+        const last = transcript.lastElementChild && transcript.lastElementChild.firstElementChild;
         if (last && last.classList.contains('delta-stream')) {
           last.innerHTML += esc(msg.content);
         } else {
@@ -464,7 +468,7 @@ export class AgentPanel {
             msg.durationMs != null ? 'took ' + msg.durationMs + ' ms' : '', msg.at);
         }
       } else if (msg.type === 'tool_call' && msg.subagent) {
-        const card = latestByName.get(msg.subagent) || subagentCard('anon-' + msg.subagent, msg.subagent, '');
+        const card = subagentCard(msg.threadId || 'anon-' + msg.subagent, msg.subagent, '');
         const row = document.createElement('div');
         row.className = 'tool-call';
         row.textContent = msg.name + '(' + JSON.stringify(msg.args) + ')';
@@ -479,6 +483,8 @@ export class AgentPanel {
       } else if (msg.type === 'command_review') {
         renderCommandReview(msg);
         recordTrace('approval', 'run_terminal_command awaiting review', msg.command);
+      } else if (msg.type === 'attempt_reset') {
+        closeOpenSubagents('stopped');
       } else if (msg.type === 'run_started') {
         closeOpenSubagents('stopped');
         setRunning(true);

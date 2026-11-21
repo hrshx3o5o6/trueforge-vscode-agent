@@ -69,7 +69,7 @@ throwaway MCP connector with `search_code`/`read_file`, and the Task B wording:
   `docs/cli.rst` as the files to change.
 
 ## Subagents + Agent Trace verification (2026-11-22, branch `feature/subagents`)
-- `npm run compile` clean; `npm run test:unit` 8/8 (`threadRouter.test.ts`).
+- `npm run compile` clean; `npm run test:unit` 12/12 (`threadRouter.test.ts`, `toolArgs.test.ts`).
 - Real `TurnController` against live TrueForge (`openai/gpt-5-4-mini`), stub MCP tools:
   - Task B wording: `explorer` started at 1.3 s, 19 tool calls attributed to it,
     done in 8.3 s; its text (1,540 chars) never reached the main answer; the
