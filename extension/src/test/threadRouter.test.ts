@@ -113,3 +113,11 @@ test("compaction events", () => {
   assert.equal(rec.compactions[1].phase, "finished");
   assert.equal(rec.compactions[1].durationMs, 1800);
 });
+
+test("thread events for the root thread are ignored", () => {
+  const { rec, router } = recorder();
+  router.handle(delta("main", "a"));
+  router.handle(done("main", { status: "done" }));
+  assert.equal(rec.dones.length, 0);
+  assert.equal(router.subagentName("main"), undefined);
+});

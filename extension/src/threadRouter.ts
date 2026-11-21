@@ -67,6 +67,7 @@ export class ThreadRouter {
         return;
       }
       case "thread.done": {
+        if (e.threadId === this.root) {return;}
         const child = this.children.get(e.threadId);
         const started = child?.startedAt ? Date.parse(child.startedAt) : NaN;
         const ended = Date.parse(e.createdAt);
