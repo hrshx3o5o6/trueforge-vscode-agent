@@ -224,11 +224,9 @@ export class AgentPanel {
   .trace-row.cat-resilience { border-left-color: var(--vscode-charts-yellow); }
   .trace-row.cat-turn { border-left-color: var(--vscode-descriptionForeground); }
   .trace-row.cat-error { border-left-color: var(--vscode-errorForeground); }
+  .trace-row.cat-subagent { border-left-color: var(--vscode-textLink-foreground); }
+  .trace-row.cat-compaction { border-left-color: var(--vscode-charts-lines); }
   .trace-row .trace-time { color: var(--vscode-descriptionForeground); margin-right: 6px; }
-  .trace-row .trace-badge {
-    display: inline-block; font-size: 9.5px; font-weight: 700; padding: 0 4px; border-radius: 3px;
-    background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); margin-right: 4px;
-  }
   .trace-row .trace-detail {
     display: none; white-space: pre-wrap; margin-top: 3px; padding-top: 3px;
     border-top: 1px dashed var(--vscode-panel-border); color: var(--vscode-descriptionForeground); font-size: 10.5px;
@@ -282,26 +280,26 @@ export class AgentPanel {
       return div;
     }
 
-    // --- Agent Trace: a structured, timestamped record of real harness ---
-    // activity (tool calls, context selection, resilience events, approval
-    // decisions), independent of the chat transcript above. Every entry is
-    // built from the SAME backend messages the transcript already renders
-    // (and the user's own decisions), so it adds zero new backend surface --
-    // purely an alternate, exportable view of what already happened.
+    // --- Agent Trace: a structured, timestamped record of harness activity ---
+    // (tool calls and which thread made them, subagents, compaction, context
+    // selection, resilience events, approval decisions), independent of the
+    // chat transcript. Harness events carry TrueForge's own createdAt
+    // timestamp; the user's own actions are stamped locally.
     const trace = [];
+    let traceSessionId = null;
+    let traceModel = null;
     function fmtTime(ts) {
       const d = new Date(ts);
       return d.toTimeString().slice(0, 8) + '.' + String(d.getMilliseconds()).padStart(3, '0');
     }
-    function recordTrace(category, summary, detail, criteria) {
-      const entry = { t: Date.now(), category, summary, detail: detail || '', criteria: criteria || [] };
+    function recordTrace(category, summary, detail, at) {
+      const entry = { t: at || new Date().toISOString(), category, summary, detail: detail || '' };
       trace.push(entry);
       traceCount.textContent = 'Agent Trace (' + trace.length + ')';
       if (traceEmpty) { traceEmpty.remove(); }
       const row = document.createElement('div');
       row.className = 'trace-row cat-' + category;
-      const badges = entry.criteria.map((c) => '<span class="trace-badge">' + esc(c) + '</span>').join('');
-      row.innerHTML = '<span class="trace-time">' + fmtTime(entry.t) + '</span>' + badges + esc(summary) +
+      row.innerHTML = '<span class="trace-time">' + fmtTime(entry.t) + '</span>' + esc(summary) +
         (entry.detail ? '<div class="trace-detail">' + esc(entry.detail) + '</div>' : '');
       row.addEventListener('click', () => row.classList.toggle('expanded'));
       traceList.appendChild(row);
@@ -313,7 +311,8 @@ export class AgentPanel {
       traceToggle.textContent = open ? 'Trace \u25be' : 'Trace \u25b8';
     });
     traceDownload.addEventListener('click', () => {
-      vscode.postMessage({ type: 'export_trace', trace: JSON.stringify(trace, null, 2) });
+      const doc = { sessionId: traceSessionId, model: traceModel, exportedAt: new Date().toISOString(), entries: trace };
+      vscode.postMessage({ type: 'export_trace', trace: JSON.stringify(doc, null, 2) });
     });
 
     // --- Subagent cards, keyed by TrueForge thread id ---
@@ -347,7 +346,7 @@ export class AgentPanel {
       const text = input.value.trim();
       if (!text) return;
       append('<div class="msg-user">' + esc(text) + '</div>');
-      recordTrace('turn', 'User sent a request', text, ['A2']);
+      recordTrace('turn', 'User sent a request', text);
       input.value = '';
       setRunning(true);
       vscode.postMessage({ type: 'send', text });
@@ -355,7 +354,7 @@ export class AgentPanel {
 
     cancelBtn.addEventListener('click', () => {
       cancelBtn.disabled = true;
-      recordTrace('turn', 'User cancelled the run', '', ['A3']);
+      recordTrace('turn', 'User cancelled the run', '');
       vscode.postMessage({ type: 'cancel' });
     });
     input.addEventListener('keydown', (e) => {
@@ -402,8 +401,8 @@ export class AgentPanel {
 
       function submitEdit() {
         const accepted = checkboxes().filter((cb) => cb.checked).map((cb) => Number(cb.dataset.index));
-        recordTrace('approval', 'User reviewed ' + esc(msg.path) + ': ' + accepted.length + '/' + msg.hunks.length + ' hunk(s) accepted',
-          accepted.length === msg.hunks.length ? 'accept all' : accepted.length === 0 ? 'reject all' : 'partial (hunks ' + accepted.join(',') + ')', ['B2']);
+        recordTrace('approval', 'User reviewed ' + msg.path + ': ' + accepted.length + '/' + msg.hunks.length + ' hunk(s) accepted',
+          accepted.length === msg.hunks.length ? 'accept all' : accepted.length === 0 ? 'reject all' : 'partial (hunks ' + accepted.join(',') + ')');
         vscode.postMessage({ type: 'edit_decision', requestId: msg.requestId, acceptedHunkIndices: accepted });
         card.querySelectorAll('button, input').forEach((el) => (el.disabled = true));
         card.insertAdjacentHTML('beforeend', '<div class="run-end">Decision sent (' + accepted.length + '/' + msg.hunks.length + ' hunks accepted).</div>');
@@ -419,12 +418,12 @@ export class AgentPanel {
         '</div>'
       );
       card.querySelector('.approve').addEventListener('click', () => {
-        recordTrace('approval', 'User approved command', msg.command, ['B2']);
+        recordTrace('approval', 'User approved command', msg.command);
         vscode.postMessage({ type: 'command_decision', requestId: msg.requestId, approved: true });
         card.querySelectorAll('button').forEach((el) => (el.disabled = true));
       });
       card.querySelector('.deny').addEventListener('click', () => {
-        recordTrace('approval', 'User denied command', msg.command, ['B2']);
+        recordTrace('approval', 'User denied command', msg.command);
         vscode.postMessage({ type: 'command_decision', requestId: msg.requestId, approved: false });
         card.querySelectorAll('button').forEach((el) => (el.disabled = true));
       });
@@ -441,6 +440,7 @@ export class AgentPanel {
         }
       } else if (msg.type === 'subagent_start') {
         subagentCard(msg.threadId, msg.name, msg.input);
+        recordTrace('subagent', msg.name + ' started — ' + String(msg.input || '').split('\\n')[0].slice(0, 100), msg.input, msg.at);
       } else if (msg.type === 'subagent_delta') {
         const text = subagentCard(msg.threadId, 'subagent', '').querySelector('.sa-text');
         text.textContent += msg.content;
@@ -453,10 +453,15 @@ export class AgentPanel {
         card.querySelector('.sa-badge').textContent = msg.ok
           ? 'done' + (msg.durationMs != null ? ' in ' + (msg.durationMs / 1000).toFixed(1) + 's' : '')
           : 'failed: ' + (msg.error || 'unknown error');
+        recordTrace('subagent', msg.ok
+          ? msg.name + ' finished' + (msg.durationMs != null ? ' in ' + (msg.durationMs / 1000).toFixed(1) + 's' : '')
+          : msg.name + ' failed: ' + (msg.error || 'unknown error'), '', msg.at);
       } else if (msg.type === 'compaction') {
         if (msg.phase === 'finished') {
           append('<div class="status-info">Context compacted (≈' + esc(msg.contextTokens) + ' tokens over the ' + esc(msg.thresholdTokens) +
             ' threshold' + (msg.durationMs != null ? ', ' + (msg.durationMs / 1000).toFixed(1) + 's' : '') + ')</div>');
+          recordTrace('compaction', 'Context compacted: ' + msg.contextTokens + ' tokens over ' + msg.thresholdTokens + ' threshold',
+            msg.durationMs != null ? 'took ' + msg.durationMs + ' ms' : '', msg.at);
         }
       } else if (msg.type === 'tool_call' && msg.subagent) {
         const card = latestByName.get(msg.subagent) || subagentCard('anon-' + msg.subagent, msg.subagent, '');
@@ -464,22 +469,23 @@ export class AgentPanel {
         row.className = 'tool-call';
         row.textContent = msg.name + '(' + JSON.stringify(msg.args) + ')';
         card.querySelector('.sa-tools').appendChild(row);
+        recordTrace('tool', msg.subagent + ' › ' + msg.name + '(' + Object.keys(msg.args || {}).join(', ') + ')', JSON.stringify(msg.args, null, 2), msg.at);
       } else if (msg.type === 'tool_call') {
         append('<div class="tool-call">' + esc(msg.name) + '(' + esc(JSON.stringify(msg.args)) + ')</div>');
-        recordTrace('tool', msg.name + '(' + Object.keys(msg.args || {}).join(', ') + ')', JSON.stringify(msg.args, null, 2), ['B1', 'B4']);
+        recordTrace('tool', msg.name + '(' + Object.keys(msg.args || {}).join(', ') + ')', JSON.stringify(msg.args, null, 2), msg.at);
       } else if (msg.type === 'edit_review') {
         renderEditReview(msg);
-        recordTrace('approval', 'propose_edit awaiting review: ' + msg.path + ' (' + msg.hunks.length + ' hunk(s))', '', ['B2']);
+        recordTrace('approval', 'propose_edit awaiting review: ' + msg.path + ' (' + msg.hunks.length + ' hunk(s))', '');
       } else if (msg.type === 'command_review') {
         renderCommandReview(msg);
-        recordTrace('approval', 'run_terminal_command awaiting review', msg.command, ['B2']);
+        recordTrace('approval', 'run_terminal_command awaiting review', msg.command);
       } else if (msg.type === 'run_started') {
         closeOpenSubagents('stopped');
         setRunning(true);
       } else if (msg.type === 'status') {
         append('<div class="status-' + esc(msg.level) + '">' + esc(msg.message) + '</div>');
         const isResilience = /retry|retrying|fallback|switching to fallback/i.test(msg.message);
-        recordTrace(isResilience ? 'resilience' : 'turn', msg.message, '', isResilience ? ['B3'] : []);
+        recordTrace(isResilience ? 'resilience' : 'turn', msg.message);
       } else if (msg.type === 'context') {
         const items = msg.items.map((it) =>
           '<li><code>' + esc(it.label) + '</code> — ' + esc(it.reason) + ' (~' + it.tokens + ' tok)</li>').join('');
@@ -487,31 +493,32 @@ export class AgentPanel {
           ' token budget)<ul>' + items + '</ul>' + (msg.dropped ? '<i>' + msg.dropped + ' lower-ranked candidate(s) left out to stay in budget</i>' : '') + '</div>');
         const detail = msg.items.map((it) => it.label + ' — ' + it.reason + ' (~' + it.tokens + ' tok)').join('\\n');
         recordTrace('context', 'Context selected: ' + msg.items.length + ' item(s), ' + msg.usedTokens + '/' + msg.budget + ' tokens' +
-          (msg.dropped ? ', ' + msg.dropped + ' dropped' : ''), detail, ['B1']);
+          (msg.dropped ? ', ' + msg.dropped + ' dropped' : ''), detail);
       } else if (msg.type === 'applied') {
         const div = append('<div class="applied">✔ applied &amp; saved <code>' + esc(msg.path) + '</code>' +
           (msg.existed ? '' : ' (new file)') + '<button class="undo">Undo</button></div>');
         div.querySelector('.undo').addEventListener('click', (ev) => {
           ev.target.disabled = true;
-          recordTrace('write', 'User clicked Undo on ' + msg.path, '', ['B2']);
+          recordTrace('write', 'User clicked Undo on ' + msg.path, '');
           vscode.postMessage({ type: 'undo', entryId: msg.entryId });
         });
-        recordTrace('write', 'Applied & saved ' + msg.path + (msg.existed ? '' : ' (new file)'), '', ['B2']);
+        recordTrace('write', 'Applied & saved ' + msg.path + (msg.existed ? '' : ' (new file)'), '');
       } else if (msg.type === 'undone') {
         append('<div class="status-info">↶ ' + esc(msg.message) + '</div>');
-        recordTrace('write', 'Undo: ' + msg.message, '', ['B2']);
+        recordTrace('write', 'Undo: ' + msg.message, '');
       } else if (msg.type === 'error') {
         append('<div class="status-error">' + esc(msg.message) + '</div>');
-        recordTrace('error', msg.message, '', ['B3']);
+        recordTrace('error', msg.message, '');
       } else if (msg.type === 'done') {
         if (msg.error) { append('<div class="status-error">' + esc(msg.error) + '</div>'); }
         const via = msg.model ? ' · ' + esc(msg.model) + (msg.usedFallback ? ' (fallback)' : '') : '';
         const sess = msg.sessionId ? ' · session ' + esc(msg.sessionId) : '';
         closeOpenSubagents(msg.status === 'cancelled' ? 'cancelled' : 'stopped');
         append('<div class="run-end">— ' + esc(msg.status || 'done') + via + sess + ' —</div>');
-        recordTrace('turn', 'Turn ' + (msg.status || 'done') + via,
-          (msg.error || '') + (msg.sessionId ? '\\nsession: ' + msg.sessionId : ''),
-          msg.usedFallback ? ['A3', 'B3'] : ['A3']);
+        if (msg.sessionId) { traceSessionId = msg.sessionId; }
+        if (msg.model) { traceModel = msg.model; }
+        recordTrace('turn', 'Turn ' + (msg.status || 'done') + (msg.model ? ' · ' + msg.model + (msg.usedFallback ? ' (fallback)' : '') : ''),
+          (msg.error || '') + (msg.sessionId ? '\\nsession: ' + msg.sessionId : ''));
         setRunning(false);
       }
     });
