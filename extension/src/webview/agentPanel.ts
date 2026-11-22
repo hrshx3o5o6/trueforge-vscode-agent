@@ -110,6 +110,7 @@ export class AgentPanel {
     background: var(--vscode-textCodeBlock-background);
     border-radius: 4px; padding: 3px 7px; opacity: 0.9;
   }
+  .tool-call { overflow-wrap: anywhere; }
   .tool-call::before { content: "›"; margin-right: 5px; opacity: 0.7; }
 
   .status-info, .status-warn, .status-error {
@@ -151,6 +152,22 @@ export class AgentPanel {
     background: color-mix(in srgb, var(--vscode-charts-purple) 6%, transparent);
   }
   .context-card li { margin: 1px 0; }
+
+  /* Dynamic subagent (TrueForge create_sub_agent): its own card, never mixed into the main answer. */
+  .subagent-card {
+    align-self: stretch; max-width: 100%; border: 1px solid var(--vscode-panel-border);
+    border-left: 3px solid var(--vscode-textLink-foreground); border-radius: 0 6px 6px 0;
+    background: color-mix(in srgb, var(--vscode-textLink-foreground) 5%, transparent); font-size: 12px;
+  }
+  .subagent-head { display: flex; align-items: baseline; gap: 6px; padding: 5px 8px; cursor: pointer; }
+  .subagent-head > span:first-child, .subagent-head code { flex: none; white-space: nowrap; }
+  .subagent-head .sa-input { flex: 1 1 auto; color: var(--vscode-descriptionForeground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .subagent-head .sa-badge { flex: none; font-size: 10.5px; padding: 0 6px; border-radius: 8px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
+  .subagent-card.failed .sa-badge { background: var(--vscode-errorForeground); }
+  .subagent-body { padding: 0 8px 6px 20px; display: flex; flex-direction: column; gap: 3px; }
+  .subagent-card.collapsed .subagent-body { display: none; }
+  .subagent-body .sa-text { white-space: pre-wrap; line-height: 1.45; max-height: 180px; overflow-y: auto; }
+  .subagent-body .sa-text:empty { display: none; }
   .cmd-text {
     font-family: var(--vscode-editor-font-family); background: var(--vscode-textCodeBlock-background);
     padding: 6px 8px; border-radius: 5px; display: block; margin: 6px 0; font-size: 12px;
@@ -178,11 +195,62 @@ export class AgentPanel {
   }
   #input:focus { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
   #composer-actions { display: flex; gap: 6px; justify-content: flex-end; }
+
+  /* --- Agent Trace: structured, timestamped record of harness activity --- */
+  #header { justify-content: space-between; }
+  #header-left { display: flex; align-items: center; gap: 6px; }
+  #trace-toggle { font-size: 11px; padding: 2px 8px; text-transform: none; letter-spacing: normal; }
+  #main { flex: 1 1 auto; display: flex; min-height: 0; }
+  #main #transcript { flex: 1 1 auto; }
+  #trace-panel {
+    display: none; flex: 0 0 340px; flex-direction: column; min-height: 0;
+    border-left: 1px solid var(--vscode-panel-border);
+  }
+  #trace-panel.open { display: flex; }
+  #trace-header {
+    flex: none; display: flex; justify-content: space-between; align-items: center;
+    padding: 6px 10px; border-bottom: 1px solid var(--vscode-panel-border);
+    font-size: 11px; font-weight: 600; text-transform: uppercase; color: var(--vscode-descriptionForeground);
+  }
+  #trace-list { flex: 1 1 auto; overflow-y: auto; padding: 6px 8px; display: flex; flex-direction: column; gap: 4px; }
+  .trace-row {
+    font-family: var(--vscode-editor-font-family); font-size: 11px; line-height: 1.4;
+    border-left: 3px solid var(--vscode-panel-border); padding: 3px 6px; cursor: pointer;
+    background: var(--vscode-textCodeBlock-background); border-radius: 0 4px 4px 0;
+  }
+  .trace-row.cat-tool { border-left-color: var(--vscode-charts-blue); }
+  .trace-row.cat-context { border-left-color: var(--vscode-charts-purple); }
+  .trace-row.cat-approval { border-left-color: var(--vscode-charts-orange); }
+  .trace-row.cat-write { border-left-color: var(--vscode-charts-green); }
+  .trace-row.cat-resilience { border-left-color: var(--vscode-charts-yellow); }
+  .trace-row.cat-turn { border-left-color: var(--vscode-descriptionForeground); }
+  .trace-row.cat-error { border-left-color: var(--vscode-errorForeground); }
+  .trace-row.cat-subagent { border-left-color: var(--vscode-textLink-foreground); }
+  .trace-row.cat-compaction { border-left-color: var(--vscode-charts-lines); }
+  .trace-row .trace-time { color: var(--vscode-descriptionForeground); margin-right: 6px; }
+  .trace-row .trace-detail {
+    display: none; white-space: pre-wrap; margin-top: 3px; padding-top: 3px;
+    border-top: 1px dashed var(--vscode-panel-border); color: var(--vscode-descriptionForeground); font-size: 10.5px;
+  }
+  .trace-row.expanded .trace-detail { display: block; }
+  #trace-empty { padding: 10px; font-size: 11px; color: var(--vscode-descriptionForeground); font-style: italic; }
 </style>
 </head>
 <body>
-  <div id="header"><span class="dot"></span>TrueForge Agent</div>
-  <div id="transcript"></div>
+  <div id="header">
+    <div id="header-left"><span class="dot"></span>TrueForge Agent</div>
+    <button id="trace-toggle">Trace ▸</button>
+  </div>
+  <div id="main">
+    <div id="transcript"></div>
+    <div id="trace-panel">
+      <div id="trace-header">
+        <span id="trace-count">Agent Trace (0)</span>
+        <button id="trace-download">Download JSON</button>
+      </div>
+      <div id="trace-list"><div id="trace-empty">Nothing recorded yet — send a message to start the trace.</div></div>
+    </div>
+  </div>
   <div id="composer">
     <textarea id="input" rows="3" placeholder="Describe the change you want... (Cmd/Ctrl+Enter to send)"></textarea>
     <div id="composer-actions">
@@ -196,6 +264,12 @@ export class AgentPanel {
     const input = document.getElementById('input');
     const sendBtn = document.getElementById('send');
     const cancelBtn = document.getElementById('cancel');
+    const tracePanel = document.getElementById('trace-panel');
+    const traceToggle = document.getElementById('trace-toggle');
+    const traceList = document.getElementById('trace-list');
+    const traceCount = document.getElementById('trace-count');
+    const traceDownload = document.getElementById('trace-download');
+    const traceEmpty = document.getElementById('trace-empty');
 
     function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 
@@ -207,10 +281,76 @@ export class AgentPanel {
       return div;
     }
 
+    // --- Agent Trace: a structured, timestamped record of harness activity ---
+    // (tool calls and which thread made them, subagents, compaction, context
+    // selection, resilience events, approval decisions), independent of the
+    // chat transcript. Harness events carry TrueForge's own createdAt
+    // timestamp; the user's own actions are stamped locally.
+    const trace = [];
+    let traceSessionId = null;
+    let traceModel = null;
+    function fmtTime(ts) {
+      const d = new Date(ts);
+      return d.toTimeString().slice(0, 8) + '.' + String(d.getMilliseconds()).padStart(3, '0');
+    }
+    function recordTrace(category, summary, detail, at) {
+      const entry = { t: at || new Date().toISOString(), category, summary, detail: detail || '' };
+      trace.push(entry);
+      traceCount.textContent = 'Agent Trace (' + trace.length + ')';
+      if (traceEmpty) { traceEmpty.remove(); }
+      const row = document.createElement('div');
+      row.className = 'trace-row cat-' + category;
+      row.innerHTML = '<span class="trace-time">' + fmtTime(entry.t) + '</span>' + esc(summary) +
+        (entry.detail ? '<div class="trace-detail">' + esc(entry.detail) + '</div>' : '');
+      row.addEventListener('click', () => row.classList.toggle('expanded'));
+      traceList.appendChild(row);
+      traceList.scrollTop = traceList.scrollHeight;
+      return entry;
+    }
+    traceToggle.addEventListener('click', () => {
+      const open = tracePanel.classList.toggle('open');
+      traceToggle.textContent = open ? 'Trace \u25be' : 'Trace \u25b8';
+    });
+    traceDownload.addEventListener('click', () => {
+      const doc = { sessionId: traceSessionId, model: traceModel, exportedAt: new Date().toISOString(), entries: trace };
+      vscode.postMessage({ type: 'export_trace', trace: JSON.stringify(doc, null, 2) });
+    });
+
+    // --- Subagent cards, keyed by TrueForge thread id ---
+    const subagentCards = new Map();
+    function subagentCard(threadId, name, input) {
+      let card = subagentCards.get(threadId);
+      if (card && name !== 'subagent') {
+        // thread.created can arrive after the child's first output: fix the label.
+        card.querySelector('.subagent-head code').textContent = name;
+        if (input) { card.querySelector('.sa-input').textContent = String(input).split('\\n')[0].slice(0, 120); }
+      }
+      if (!card) {
+        const firstLine = String(input || '').split('\\n')[0].slice(0, 120);
+        card = append(
+          '<div class="subagent-card running">' +
+          '<div class="subagent-head"><span>⑂ Subagent</span><code>' + esc(name) + '</code>' +
+          '<span class="sa-input">' + esc(firstLine) + '</span><span class="sa-badge">running…</span></div>' +
+          '<div class="subagent-body"><div class="sa-text"></div><div class="sa-tools"></div></div></div>'
+        ).firstElementChild;
+        card.querySelector('.subagent-head').addEventListener('click', () => card.classList.toggle('collapsed'));
+        subagentCards.set(threadId, card);
+      }
+      return card;
+    }
+    function closeOpenSubagents(status) {
+      subagentCards.forEach((card) => {
+        if (!card.classList.contains('running')) return;
+        card.classList.remove('running');
+        card.querySelector('.sa-badge').textContent = status;
+      });
+    }
+
     sendBtn.addEventListener('click', () => {
       const text = input.value.trim();
       if (!text) return;
       append('<div class="msg-user">' + esc(text) + '</div>');
+      recordTrace('turn', 'User sent a request', text);
       input.value = '';
       setRunning(true);
       vscode.postMessage({ type: 'send', text });
@@ -218,6 +358,7 @@ export class AgentPanel {
 
     cancelBtn.addEventListener('click', () => {
       cancelBtn.disabled = true;
+      recordTrace('turn', 'User cancelled the run', '');
       vscode.postMessage({ type: 'cancel' });
     });
     input.addEventListener('keydown', (e) => {
@@ -264,6 +405,8 @@ export class AgentPanel {
 
       function submitEdit() {
         const accepted = checkboxes().filter((cb) => cb.checked).map((cb) => Number(cb.dataset.index));
+        recordTrace('approval', 'User reviewed ' + msg.path + ': ' + accepted.length + '/' + msg.hunks.length + ' hunk(s) accepted',
+          accepted.length === msg.hunks.length ? 'accept all' : accepted.length === 0 ? 'reject all' : 'partial (hunks ' + accepted.join(',') + ')');
         vscode.postMessage({ type: 'edit_decision', requestId: msg.requestId, acceptedHunkIndices: accepted });
         card.querySelectorAll('button, input').forEach((el) => (el.disabled = true));
         card.insertAdjacentHTML('beforeend', '<div class="run-end">Decision sent (' + accepted.length + '/' + msg.hunks.length + ' hunks accepted).</div>');
@@ -279,10 +422,12 @@ export class AgentPanel {
         '</div>'
       );
       card.querySelector('.approve').addEventListener('click', () => {
+        recordTrace('approval', 'User approved command', msg.command);
         vscode.postMessage({ type: 'command_decision', requestId: msg.requestId, approved: true });
         card.querySelectorAll('button').forEach((el) => (el.disabled = true));
       });
       card.querySelector('.deny').addEventListener('click', () => {
+        recordTrace('approval', 'User denied command', msg.command);
         vscode.postMessage({ type: 'command_decision', requestId: msg.requestId, approved: false });
         card.querySelectorAll('button').forEach((el) => (el.disabled = true));
       });
@@ -291,43 +436,95 @@ export class AgentPanel {
     window.addEventListener('message', (event) => {
       const msg = event.data;
       if (msg.type === 'delta') {
-        const last = transcript.lastElementChild;
+        const last = transcript.lastElementChild && transcript.lastElementChild.firstElementChild;
         if (last && last.classList.contains('delta-stream')) {
           last.innerHTML += esc(msg.content);
         } else {
           append('<div class="delta-stream">' + esc(msg.content) + '</div>');
         }
+      } else if (msg.type === 'subagent_start') {
+        subagentCard(msg.threadId, msg.name, msg.input);
+        recordTrace('subagent', msg.name + ' started — ' + String(msg.input || '').split('\\n')[0].slice(0, 100), msg.input, msg.at);
+      } else if (msg.type === 'subagent_delta') {
+        const text = subagentCard(msg.threadId, 'subagent', '').querySelector('.sa-text');
+        text.textContent += msg.content;
+        text.scrollTop = text.scrollHeight;
+      } else if (msg.type === 'subagent_done') {
+        const card = subagentCard(msg.threadId, msg.name, '');
+        card.classList.remove('running');
+        card.classList.add('collapsed');
+        if (!msg.ok) card.classList.add('failed');
+        card.querySelector('.sa-badge').textContent = msg.ok
+          ? 'done' + (msg.durationMs != null ? ' in ' + (msg.durationMs / 1000).toFixed(1) + 's' : '')
+          : 'failed: ' + (msg.error || 'unknown error');
+        recordTrace('subagent', msg.ok
+          ? msg.name + ' finished' + (msg.durationMs != null ? ' in ' + (msg.durationMs / 1000).toFixed(1) + 's' : '')
+          : msg.name + ' failed: ' + (msg.error || 'unknown error'), '', msg.at);
+      } else if (msg.type === 'compaction') {
+        if (msg.phase === 'finished') {
+          append('<div class="status-info">Context compacted (≈' + esc(msg.contextTokens) + ' tokens over the ' + esc(msg.thresholdTokens) +
+            ' threshold' + (msg.durationMs != null ? ', ' + (msg.durationMs / 1000).toFixed(1) + 's' : '') + ')</div>');
+          recordTrace('compaction', 'Context compacted: ' + msg.contextTokens + ' tokens over ' + msg.thresholdTokens + ' threshold',
+            msg.durationMs != null ? 'took ' + msg.durationMs + ' ms' : '', msg.at);
+        }
+      } else if (msg.type === 'tool_call' && msg.subagent) {
+        const card = subagentCard(msg.threadId || 'anon-' + msg.subagent, msg.subagent, '');
+        const row = document.createElement('div');
+        row.className = 'tool-call';
+        row.textContent = msg.name + '(' + JSON.stringify(msg.args) + ')';
+        card.querySelector('.sa-tools').appendChild(row);
+        recordTrace('tool', msg.subagent + ' › ' + msg.name + '(' + Object.keys(msg.args || {}).join(', ') + ')', JSON.stringify(msg.args, null, 2), msg.at);
       } else if (msg.type === 'tool_call') {
         append('<div class="tool-call">' + esc(msg.name) + '(' + esc(JSON.stringify(msg.args)) + ')</div>');
+        recordTrace('tool', msg.name + '(' + Object.keys(msg.args || {}).join(', ') + ')', JSON.stringify(msg.args, null, 2), msg.at);
       } else if (msg.type === 'edit_review') {
         renderEditReview(msg);
+        recordTrace('approval', 'propose_edit awaiting review: ' + msg.path + ' (' + msg.hunks.length + ' hunk(s))', '');
       } else if (msg.type === 'command_review') {
         renderCommandReview(msg);
+        recordTrace('approval', 'run_terminal_command awaiting review', msg.command);
+      } else if (msg.type === 'attempt_reset') {
+        closeOpenSubagents('stopped');
       } else if (msg.type === 'run_started') {
+        closeOpenSubagents('stopped');
         setRunning(true);
       } else if (msg.type === 'status') {
         append('<div class="status-' + esc(msg.level) + '">' + esc(msg.message) + '</div>');
+        const isResilience = /retry|retrying|fallback|switching to fallback/i.test(msg.message);
+        recordTrace(isResilience ? 'resilience' : 'turn', msg.message);
       } else if (msg.type === 'context') {
         const items = msg.items.map((it) =>
           '<li><code>' + esc(it.label) + '</code> — ' + esc(it.reason) + ' (~' + it.tokens + ' tok)</li>').join('');
         append('<div class="context-card"><b>Context selected</b> (' + msg.usedTokens + ' / ' + msg.budget +
           ' token budget)<ul>' + items + '</ul>' + (msg.dropped ? '<i>' + msg.dropped + ' lower-ranked candidate(s) left out to stay in budget</i>' : '') + '</div>');
+        const detail = msg.items.map((it) => it.label + ' — ' + it.reason + ' (~' + it.tokens + ' tok)').join('\\n');
+        recordTrace('context', 'Context selected: ' + msg.items.length + ' item(s), ' + msg.usedTokens + '/' + msg.budget + ' tokens' +
+          (msg.dropped ? ', ' + msg.dropped + ' dropped' : ''), detail);
       } else if (msg.type === 'applied') {
         const div = append('<div class="applied">✔ applied &amp; saved <code>' + esc(msg.path) + '</code>' +
           (msg.existed ? '' : ' (new file)') + '<button class="undo">Undo</button></div>');
         div.querySelector('.undo').addEventListener('click', (ev) => {
           ev.target.disabled = true;
+          recordTrace('write', 'User clicked Undo on ' + msg.path, '');
           vscode.postMessage({ type: 'undo', entryId: msg.entryId });
         });
+        recordTrace('write', 'Applied & saved ' + msg.path + (msg.existed ? '' : ' (new file)'), '');
       } else if (msg.type === 'undone') {
         append('<div class="status-info">↶ ' + esc(msg.message) + '</div>');
+        recordTrace('write', 'Undo: ' + msg.message, '');
       } else if (msg.type === 'error') {
         append('<div class="status-error">' + esc(msg.message) + '</div>');
+        recordTrace('error', msg.message, '');
       } else if (msg.type === 'done') {
         if (msg.error) { append('<div class="status-error">' + esc(msg.error) + '</div>'); }
         const via = msg.model ? ' · ' + esc(msg.model) + (msg.usedFallback ? ' (fallback)' : '') : '';
         const sess = msg.sessionId ? ' · session ' + esc(msg.sessionId) : '';
+        closeOpenSubagents(msg.status === 'cancelled' ? 'cancelled' : 'stopped');
         append('<div class="run-end">— ' + esc(msg.status || 'done') + via + sess + ' —</div>');
+        if (msg.sessionId) { traceSessionId = msg.sessionId; }
+        if (msg.model) { traceModel = msg.model; }
+        recordTrace('turn', 'Turn ' + (msg.status || 'done') + (msg.model ? ' · ' + msg.model + (msg.usedFallback ? ' (fallback)' : '') : ''),
+          (msg.error || '') + (msg.sessionId ? '\\nsession: ' + msg.sessionId : ''));
         setRunning(false);
       }
     });

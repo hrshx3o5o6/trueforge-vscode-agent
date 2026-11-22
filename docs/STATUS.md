@@ -52,3 +52,40 @@ Last updated 2026-11-20 (branch `fix/audit-findings`).
 - [ ] Demo video (≤ 4 min, tasks A → B → C, show TrueForge session in B)
 - [ ] Write-up PDF (8 headings — see `docs/WRITEUP_OUTLINE.md`)
 - [ ] Make the GitHub repo public before 20 Nov 23:59 IST
+
+## Subagent spike (2026-11-22)
+Standalone script against TrueForge local mode (`openai/gpt-5-4-mini`), using
+the agent definition's instructions with the new SUBAGENTS paragraph, a
+throwaway MCP connector with `search_code`/`read_file`, and the Task B wording:
+- The parent spawns a dynamic subagent through the TrueForge system tool
+  **`create_sub_agent`** (`toolInfo.type: "truefoundry-system"`), args
+  `{name: "explorer", input: …}`, within ~6 s.
+- The child **does get the parent's MCP tools**: 16 `search_code`/`read_file`
+  calls were served on the child's thread.
+- `thread.created` (with `agentInfo.name/input` and `parent.threadId/toolCallId`)
+  and `thread.done` (`state.status: "done"`) **arrive on the turn stream**.
+- The root thread's id is the literal string `main`; the child gets a ULID.
+- The parent then reported `src/flask/cli.py`, `tests/test_cli.py`,
+  `docs/cli.rst` as the files to change.
+
+## Subagents + Agent Trace verification (2026-11-22, branch `feature/subagents`)
+- `npm run compile` clean; `npm run test:unit` 12/12 (`threadRouter.test.ts`, `toolArgs.test.ts`).
+- Real `TurnController` against live TrueForge (`openai/gpt-5-4-mini`), stub MCP tools:
+  - Task B wording: `explorer` started at 1.3 s, 19 tool calls attributed to it,
+    done in 8.3 s; its text (1,540 chars) never reached the main answer; the
+    main agent then proposed edits to `src/flask/cli.py`, `tests/test_cli.py`,
+    `docs/cli.rst`.
+  - Task A (inline) wording: no subagent; tool calls attributed to the main thread.
+  - Cancel the moment the explorer starts: run returns `cancelled`, the server
+    turn is `cancelled` (`client-cancelled`), flask `git status` clean.
+  - `openai/gpt-5-4-nano` also delegates (spike).
+- Webview rendered from the real `renderHtml()` with replayed messages: explorer
+  card (collapsible, tool list, "done in 8.3s"), a still-running card turns
+  "cancelled" on a cancelled `done`, compaction line, trace rows with
+  `explorer ›` prefixes, no rubric tags, `<b>&"` shown literally, export JSON has
+  `sessionId`/`model`/`entries`.
+- **Not yet run in the Extension Development Host by a person:** full Tasks A/B/C
+  with the real MCP server, review cards and undo.
+- **Fallback model broken:** `ollama/qwen25-7b` is configured as fallback but
+  Ollama only has `llama3.2` (`model 'qwen2.5:7b' not found`). Pull it
+  (`ollama pull qwen2.5:7b`) or set another fallback before recording Task C.

@@ -93,6 +93,22 @@ we preload them. Context-engineering features we do use: compaction,
 large-tool-response offload, dynamic subagents (all in the agent
 definition), plus our own pre-turn context assembly.
 
+## Discovery is delegated to an explorer subagent, by the agent (2026-11-22)
+`dynamicSubAgents` was enabled from the start, but nothing asked the agent
+to use it and nothing showed it. The instructions now tell the agent, for
+multi-file tasks where no files are named, to start one dynamic subagent
+named `explorer` through TrueForge's `create_sub_agent` tool and to make
+every edit itself. Why: discovery is the noisy part (many searches, long
+file reads), and it now stays in the child's context; the editing thread
+gets back a compact file list with reasons. It is the agent's decision,
+not a pipeline hardcoded in the extension, so a model that skips it still
+completes the task. Inline edits are told never to delegate, to keep
+Task A fast. Verified live: the child thread gets our MCP tools, and
+`thread.created`/`thread.done` arrive on the turn stream (see STATUS.md).
+Tool calls in the panel are now reported from TrueForge's `tool.response`
+events, not by the MCP server, because only those say which thread made
+the call.
+
 ## Edits are saved, journaled and roll back as a unit
 `WorkspaceEdit` alone only changes the in-memory document, so `pytest` in
 a terminal saw the old file. Every applied change is now saved and
